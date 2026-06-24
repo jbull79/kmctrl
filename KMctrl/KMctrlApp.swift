@@ -43,9 +43,10 @@ struct KMctrlApp: App {
                 .environmentObject(model.manager)
                 .environmentObject(model.manager.discovery)
                 .environmentObject(model.host)
-                .frame(minWidth: 620, minHeight: 480)
+                .frame(width: 440)
                 .onAppear { model.start() }
         }
+        .windowResizability(.contentSize)
         .windowToolbarStyle(.unified)
 
         MenuBarExtra("KMctrl", systemImage: "keyboard", isInserted: Binding(

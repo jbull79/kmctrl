@@ -12,14 +12,13 @@ struct ContentView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.s5) {
-                    controlSection
-                    beControlledSection
-                }
-                .padding(Theme.s5)
+            VStack(alignment: .leading, spacing: Theme.s4) {
+                controlSection
+                beControlledSection
             }
+            .padding(Theme.s4)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .navigationTitle("KMctrl")
         .alert("Allow keyboard & mouse control?", isPresented: Binding(
             get: { manager.pendingControlRequest != nil },
