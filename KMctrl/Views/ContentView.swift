@@ -1,0 +1,136 @@
+import SwiftUI
+
+/// Single-screen KMctrl: control another Mac, and allow this Mac to be controlled.
+struct ContentView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var manager: ControlManager
+    @EnvironmentObject private var discovery: DiscoveryService
+    @EnvironmentObject private var host: ControlHost
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.s5) {
+                    controlSection
+                    beControlledSection
+                }
+                .padding(Theme.s5)
+            }
+        }
+        .navigationTitle("KMctrl")
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: Theme.s2) {
+            Image(systemName: "keyboard").foregroundStyle(.tint)
+            Text(settings.deviceName).fontWeight(.semibold)
+            Spacer()
+            if let by = manager.controlActiveFrom {
+                Label("Controlled by \(by)", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal, Theme.s4).padding(.vertical, Theme.s3)
+    }
+
+    // MARK: Control another Mac
+
+    private var controlSection: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            SectionLabel("Control a device")
+
+            if host.state != .idle {
+                activeHostCard
+            }
+
+            if discovery.peers.isEmpty {
+                HStack(spacing: Theme.s2) {
+                    ProgressView().controlSize(.small)
+                    Text("Looking for nearby Macs running KMctrl…").foregroundStyle(.secondary)
+                }
+                .padding(.vertical, Theme.s2)
+            } else {
+                ForEach(discovery.peers) { peer in peerRow(peer) }
+            }
+        }
+    }
+
+    private func peerRow(_ peer: Peer) -> some View {
+        HStack(spacing: Theme.s3) {
+            Image(systemName: "desktopcomputer").font(.title3).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(peer.name).fontWeight(.medium)
+                if let a = peer.address {
+                    Text(a).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button("Control") { startControl(peer) }
+                .disabled(host.state != .idle)
+        }
+        .padding(Theme.s3)
+        .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.cardFill))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+
+    private var activeHostCard: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            HStack(spacing: Theme.s2) {
+                StatusDot(color: host.state == .capturing ? .green : .orange)
+                Text(hostStatusText).fontWeight(.medium)
+                Spacer()
+                Button("Disconnect") { host.disconnect() }
+            }
+            if let err = host.lastError { Text(err).font(.caption).foregroundStyle(.red) }
+            if host.state == .connected {
+                Button { host.beginCapture() } label: {
+                    Label("Start controlling", systemImage: "cursorarrow.rays").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                Text("Your keyboard & mouse drive \(host.peerName ?? "the other Mac"). Press ⌃⌥⌘ to release.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if host.state == .capturing {
+                Text("Controlling \(host.peerName ?? "") — press ⌃⌥⌘ to release.")
+                    .font(.caption).foregroundStyle(.green)
+            }
+        }
+        .padding(Theme.s3)
+        .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.cardFill))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1))
+    }
+
+    private var hostStatusText: String {
+        switch host.state {
+        case .idle: return ""
+        case .connecting: return "Connecting to \(host.peerName ?? "")…"
+        case .connected: return "Connected to \(host.peerName ?? "")"
+        case .capturing: return "Controlling \(host.peerName ?? "")"
+        }
+    }
+
+    private func startControl(_ peer: Peer) {
+        host.edgeModeEnabled = false                 // window mode (no permissions needed)
+        host.controlEdge = settings.controlEdge
+        host.connect(to: peer, localName: settings.deviceName)
+    }
+
+    // MARK: Be controlled
+
+    private var beControlledSection: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            SectionLabel("Allow this Mac to be controlled")
+            Toggle("Accept keyboard & mouse control from trusted Macs", isOn: $settings.controlEnabled)
+                .toggleStyle(.switch)
+            Text("Window mode needs no permissions. Edge mode (bump a screen edge) needs Accessibility + Input Monitoring — grant them in Settings → Control.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(Theme.s3)
+        .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.cardFill))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+}
