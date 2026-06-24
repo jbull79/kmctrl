@@ -21,6 +21,17 @@ struct ContentView: View {
             }
         }
         .navigationTitle("KMctrl")
+        .alert("Allow keyboard & mouse control?", isPresented: Binding(
+            get: { manager.pendingControlRequest != nil },
+            set: { if !$0 { manager.resolveControlPending(false) } })
+        ) {
+            Button("Decline", role: .cancel) { manager.resolveControlPending(false) }
+            Button("Allow") { manager.resolveControlPending(true) }
+        } message: {
+            if let r = manager.pendingControlRequest {
+                Text("“\(r.peerName)” wants to control this Mac's keyboard and mouse.\nFingerprint: \(r.fingerprint)\n\nAllowing trusts this device for future control.")
+            }
+        }
     }
 
     // MARK: Header

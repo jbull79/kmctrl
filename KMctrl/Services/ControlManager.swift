@@ -5,6 +5,20 @@ import Network
 /// handshake, and routes `.control` sessions to a `ControlInjector` (and `.status` queries to
 /// a readiness report). Also owns Bonjour discovery + listener rebind on network change.
 /// The *controlling* side is `ControlHost`.
+/// A first-time request from an untrusted peer to control this Mac. Accepting trusts it so
+/// future control sessions are silent.
+@MainActor
+final class ControlApprovalRequest: ObservableObject, Identifiable {
+    let id = UUID()
+    let peerName: String
+    let fingerprint: String
+    private let respond: (Bool) -> Void
+    init(peerName: String, fingerprint: String, respond: @escaping (Bool) -> Void) {
+        self.peerName = peerName; self.fingerprint = fingerprint; self.respond = respond
+    }
+    func resolve(_ accepted: Bool) { respond(accepted) }
+}
+
 @MainActor
 final class ControlManager: ObservableObject {
     let settings: AppSettings
@@ -15,6 +29,8 @@ final class ControlManager: ObservableObject {
 
     /// Peer currently controlling this Mac, if any.
     @Published var controlActiveFrom: String?
+    /// A first-time request from an untrusted peer to control this Mac.
+    @Published var pendingControlRequest: ControlApprovalRequest?
 
     private let pathMonitor = NWPathMonitor()
     private var pathMonitorStarted = false
@@ -86,14 +102,26 @@ final class ControlManager: ObservableObject {
                     try await link.sendSecureObject(self.localStatusReport(trusted: trusted))
                     link.cancel()
                 case .control:
-                    let accepted = self.settings.controlEnabled
-                    try await link.sendSecureObject(ControlAck(
-                        accepted: accepted,
-                        reason: accepted ? "" : "Control is turned off on \(self.settings.deviceName)"))
-                    guard accepted else {
-                        DebugLog.log("incoming: control refused (control disabled)", .warn)
+                    // Master switch off → refuse outright.
+                    guard self.settings.controlEnabled else {
+                        try await link.sendSecureObject(ControlAck(
+                            accepted: false, reason: "Control is turned off on \(self.settings.deviceName)"))
                         link.cancel(); return
                     }
+                    // Trust-gate: a trusted peer is accepted silently; an unknown peer needs a
+                    // one-time prompt, and accepting trusts it. Never inject input from a
+                    // stranger just because the master switch is on.
+                    let fp = link.remoteFingerprint
+                    let accepted = self.trust.isTrusted(fp)
+                        ? true
+                        : await self.requestControlApproval(name: link.remoteName, fingerprint: fp)
+                    try await link.sendSecureObject(ControlAck(
+                        accepted: accepted, reason: accepted ? "" : "\(self.settings.deviceName) declined control"))
+                    guard accepted else {
+                        DebugLog.log("incoming: control declined", .warn)
+                        link.cancel(); return
+                    }
+                    if !self.trust.isTrusted(fp) { self.trust.trust(fp, name: link.remoteName) }
                     link.setLowLatency()
                     await self.runControlReceive(link: link)
                 default:
@@ -152,6 +180,20 @@ final class ControlManager: ObservableObject {
                             controlInputMonitoring: readiness.inputMonitoring,
                             controlEventTap: readiness.eventTapCreatable,
                             workbook: false, clipboard: false)
+    }
+
+    private func requestControlApproval(name: String, fingerprint: String) async -> Bool {
+        await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            pendingControlRequest = ControlApprovalRequest(peerName: name, fingerprint: fingerprint) { ok in
+                cont.resume(returning: ok)
+            }
+        }
+    }
+
+    func resolveControlPending(_ accepted: Bool) {
+        let req = pendingControlRequest
+        pendingControlRequest = nil
+        req?.resolve(accepted)
     }
 
     func queryStatus(of peer: Peer) async -> StatusReport? {

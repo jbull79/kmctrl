@@ -2,8 +2,25 @@ import SwiftUI
 import AppKit
 
 struct SettingsView: View {
+    @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var manager: ControlManager
+
+    private enum Presence: String, CaseIterable, Identifiable {
+        case both = "Dock + Menu bar", dock = "Dock only", menuBar = "Menu bar only"
+        var id: String { rawValue }
+    }
+    private var presence: Presence {
+        if settings.hideDockIcon { return .menuBar }
+        return settings.menuBarVisible ? .both : .dock
+    }
+    private func setPresence(_ p: Presence) {
+        switch p {
+        case .both:    settings.menuBarVisible = true;  model.setHideDockIcon(false)
+        case .dock:    settings.menuBarVisible = false; model.setHideDockIcon(false)
+        case .menuBar: settings.menuBarVisible = true;  model.setHideDockIcon(true)
+        }
+    }
 
     @State private var portText = ""
     @State private var localIP: String?
@@ -37,6 +54,16 @@ struct SettingsView: View {
                             .font(.system(.body, design: .monospaced)).textSelection(.enabled)
                     }
                 }
+            }
+            Section {
+                Picker("Show KMctrl in", selection: Binding(
+                    get: { presence }, set: { setPresence($0) })) {
+                    ForEach(Presence.allCases) { Text($0.rawValue).tag($0) }
+                }
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Run from the Dock, the menu bar, or both.")
             }
             Section {
                 ForEach(TransportStrategy.allCases, id: \.self) { s in
