@@ -38,24 +38,28 @@ func drawIcon(_ ts: CGFloat) -> CGImage {
     ctx.addPath(roundedRect(kb, ts * 0.055)); ctx.setFillColor(c(1, 1, 1, 0.96)); ctx.fillPath()
     ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
-    // Keys cut as coloured holes
+    // Keys cut as coloured holes — two rows of keys, then a single spacebar at the bottom.
     ctx.setFillColor(c(0.10, 0.34, 0.40, 1))
     let pad = kb.width * 0.085
-    let cols = 5, rows = 3
+    let cols = 5
     let keyGap = kb.width * 0.03
     let keyW = (kb.width - pad * 2 - keyGap * CGFloat(cols - 1)) / CGFloat(cols)
     let keyH = keyW
-    let topY = kb.maxY - pad - keyH
-    for r in 0..<rows {
+    for r in 0..<2 {
         for col in 0..<cols {
-            let x = kb.minX + pad + CGFloat(col) * (keyW + keyGap) + CGFloat(r) * keyW * 0.18
-            let y = topY - CGFloat(r) * (keyH + keyGap)
-            if x + keyW > kb.maxX - pad { continue }
+            let x = kb.minX + pad + CGFloat(col) * (keyW + keyGap)
+            let y = (kb.maxY - pad - keyH) - CGFloat(r) * (keyH + keyGap)
             ctx.addPath(roundedRect(CGRect(x: x, y: y, width: keyW, height: keyH), keyW * 0.22))
         }
     }
-    let sbY = kb.minY + pad
-    ctx.addPath(roundedRect(CGRect(x: kb.minX + pad * 2.2, y: sbY, width: kb.width - pad * 4.4, height: keyH * 0.7), keyH * 0.2))
+    ctx.fillPath()
+    // Spacebar: one long key on the bottom row, flanked by a key-width margin each side.
+    let sbH = keyH * 0.82
+    let sbRect = CGRect(x: kb.minX + pad + keyW + keyGap,
+                        y: kb.minY + pad,
+                        width: kb.width - pad * 2 - (keyW + keyGap) * 2,
+                        height: sbH)
+    ctx.addPath(roundedRect(sbRect, sbH * 0.35))
     ctx.fillPath()
 
     // Cursor arrow (mouse control)
