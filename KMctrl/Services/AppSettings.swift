@@ -39,7 +39,7 @@ final class AppSettings: ObservableObject {
     init() {
         deviceName = defaults.string(forKey: Keys.deviceName) ?? Host.current().localizedName ?? "My Mac"
         let storedPort = defaults.integer(forKey: Keys.port)
-        port = storedPort == 0 ? 51234 : UInt16(storedPort)
+        port = storedPort == 0 ? 51236 : UInt16(storedPort)   // distinct from NetCatch (51234) so both can coexist
         controlEnabled = defaults.bool(forKey: Keys.control)
         controlEdge = ScreenEdge(rawValue: defaults.string(forKey: Keys.controlEdge) ?? "") ?? .right
         useEdgeMode = defaults.bool(forKey: Keys.edgeMode)
