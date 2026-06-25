@@ -25,6 +25,10 @@ final class ControlInjector: @unchecked Sendable {
     private let lock = NSLock()
     private var pendDX = 0.0, pendDY = 0.0
     private var timer: DispatchSourceTimer?
+    // Sub-pixel scroll remainder. High-res trackpad deltas are fractional; truncating each
+    // event to an Int floors small swipes to 0 (dead/notchy scroll). Carry the remainder so
+    // fractional motion accumulates into whole pixels instead of being lost.
+    private var scrollRemX = 0.0, scrollRemY = 0.0
     // Fraction of the remaining buffered movement applied per 120 Hz tick. Lower = motion
     // is spread across more ticks → fills the ~100 ms Wi-Fi delivery gaps with continuous
     // glide instead of a quick burst then freeze. Trades a little latency for smoothness.
@@ -36,6 +40,9 @@ final class ControlInjector: @unchecked Sendable {
     }
 
     func start() {
+        // Seed from the real cursor so the first forwarded move continues from where the
+        // pointer already is, instead of jumping from the desktop centre.
+        if let here = CGEvent(source: nil)?.location { cursor = here }
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "netcatch.inject", qos: .userInteractive))
         t.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .nanoseconds(0))
         t.setEventHandler { [weak self] in self?.drain() }
@@ -62,9 +69,15 @@ final class ControlInjector: @unchecked Sendable {
             if e.button == 0 { mouseDown = false }
             postMouse(upType(e.button), button: cgButton(e.button))
         case .scroll:
-            CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
-                    wheel1: Int32(e.scrollY), wheel2: Int32(e.scrollX), wheel3: 0)?
-                .post(tap: .cghidEventTap)
+            scrollRemX += e.scrollX; scrollRemY += e.scrollY
+            let iy = (scrollRemY < 0 ? scrollRemY.rounded(.up) : scrollRemY.rounded(.down))
+            let ix = (scrollRemX < 0 ? scrollRemX.rounded(.up) : scrollRemX.rounded(.down))
+            scrollRemY -= iy; scrollRemX -= ix
+            if iy != 0 || ix != 0 {
+                CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
+                        wheel1: Int32(iy), wheel2: Int32(ix), wheel3: 0)?
+                    .post(tap: .cghidEventTap)
+            }
         case .keyDown:
             flags = CGEventFlags(rawValue: e.flags)
             postKey(CGKeyCode(e.keyCode), down: true)

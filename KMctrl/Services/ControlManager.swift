@@ -34,6 +34,8 @@ final class ControlManager: ObservableObject {
 
     /// The link of the active inbound control session, so this Mac can end it.
     private var controlledLink: PeerLink?
+    /// On-screen "being controlled" badge (+ kill switch) shown while a remote drives us.
+    private let badge = ControlBadgeController()
 
     /// End the control session from the controlled side (kick the controller off).
     func disconnectControlled() {
@@ -146,6 +148,7 @@ final class ControlManager: ObservableObject {
         let name = link.remoteName
         controlActiveFrom = name
         controlledLink = link
+        badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
         DebugLog.log("control: session started from \(name)")
         await Task.detached(priority: .userInitiated) {
             let injector = ControlInjector()
@@ -169,6 +172,7 @@ final class ControlManager: ObservableObject {
         }.value
         controlActiveFrom = nil
         controlledLink = nil
+        badge.hide()
         link.cancel()
         DebugLog.log("control: session ended (\(name))")
     }

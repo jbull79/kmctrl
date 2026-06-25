@@ -31,6 +31,9 @@ final class ControlHost: ObservableObject {
     private let flushQueue = DispatchQueue(label: "netcatch.control.flush", qos: .userInteractive)
     private var flushTimer: DispatchSourceTimer?
 
+    /// Brief on-screen "press ⌃⌥⌘ to release" hint shown when capture begins.
+    private let hint = CaptureHintController()
+
     init() {
         NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -157,11 +160,13 @@ final class ControlHost: ObservableObject {
         CGAssociateMouseAndMouseCursorPosition(0)   // decouple hardware mouse from cursor
         state = .capturing
         startFlushTimer()
+        hint.flash()                                // remind how to release
         DebugLog.log("control host: capture begin")
     }
 
     private func leaveCapture(warpInsideEdge: Bool) {
         state = .connected                          // set first — prevents reentrancy
+        hint.hide()
         flushTimer?.cancel(); flushTimer = nil
         CGAssociateMouseAndMouseCursorPosition(1)   // always restore the cursor
         CGDisplayShowCursor(CGMainDisplayID())
