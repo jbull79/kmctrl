@@ -7,6 +7,9 @@ struct ContentView: View {
     @EnvironmentObject private var manager: ControlManager
     @EnvironmentObject private var discovery: DiscoveryService
     @EnvironmentObject private var host: ControlHost
+    // Mirror the accept-control switch through UserDefaults so every window (main, Settings,
+    // menu bar) refreshes live — @Published alone doesn't redraw a non-key background window.
+    @AppStorage(AppSettings.Keys.control) private var acceptControl = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -145,13 +148,12 @@ struct ContentView: View {
                 }
                 .padding(.bottom, Theme.s1)
             }
-            Toggle("Accept keyboard & mouse control from trusted Macs", isOn: Binding(
-                get: { settings.controlEnabled },
-                set: { on in
-                    settings.controlEnabled = on
-                    if !on { manager.disconnectControlled() }   // ending acceptance ends any session
-                }))
+            Toggle("Accept keyboard & mouse control from trusted Macs", isOn: $acceptControl)
                 .toggleStyle(.switch)
+                .onChange(of: acceptControl) { on in
+                    settings.controlEnabled = on                // keep the model + services in sync
+                    if !on { manager.disconnectControlled() }   // ending acceptance ends any session
+                }
             Text("Window mode needs no permissions. Edge mode (bump a screen edge) needs Accessibility + Input Monitoring — grant them in Settings → Control.")
                 .font(.caption).foregroundStyle(.secondary)
         }

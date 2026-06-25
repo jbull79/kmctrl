@@ -24,6 +24,8 @@ struct SettingsView: View {
 
     @State private var portText = ""
     @State private var localIP: String?
+    // Live cross-window mirror of the accept-control switch (see ContentView).
+    @AppStorage(AppSettings.Keys.control) private var acceptControl = false
 
     var body: some View {
         TabView {
@@ -87,7 +89,11 @@ struct SettingsView: View {
     private var control: some View {
         Form {
             Section {
-                Toggle("Accept control from trusted Macs", isOn: $settings.controlEnabled)
+                Toggle("Accept control from trusted Macs", isOn: $acceptControl)
+                    .onChange(of: acceptControl) { on in
+                        settings.controlEnabled = on
+                        if !on { manager.disconnectControlled() }
+                    }
             } header: {
                 Text("This Mac")
             } footer: {
