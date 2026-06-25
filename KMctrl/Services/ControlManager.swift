@@ -32,6 +32,14 @@ final class ControlManager: ObservableObject {
     /// A first-time request from an untrusted peer to control this Mac.
     @Published var pendingControlRequest: ControlApprovalRequest?
 
+    /// The link of the active inbound control session, so this Mac can end it.
+    private var controlledLink: PeerLink?
+
+    /// End the control session from the controlled side (kick the controller off).
+    func disconnectControlled() {
+        controlledLink?.cancel()
+    }
+
     private let pathMonitor = NWPathMonitor()
     private var pathMonitorStarted = false
     private var lastBoundIP: String?
@@ -137,6 +145,7 @@ final class ControlManager: ObservableObject {
     private func runControlReceive(link: PeerLink) async {
         let name = link.remoteName
         controlActiveFrom = name
+        controlledLink = link
         DebugLog.log("control: session started from \(name)")
         await Task.detached(priority: .userInitiated) {
             let injector = ControlInjector()
@@ -159,6 +168,7 @@ final class ControlManager: ObservableObject {
             }
         }.value
         controlActiveFrom = nil
+        controlledLink = nil
         link.cancel()
         DebugLog.log("control: session ended (\(name))")
     }

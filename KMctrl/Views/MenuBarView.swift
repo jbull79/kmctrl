@@ -17,8 +17,13 @@ struct MenuBarView: View {
                 Spacer()
             }
             if let by = manager.controlActiveFrom {
-                Label("Controlled by \(by)", systemImage: "dot.radiowaves.left.and.right")
-                    .font(.caption).foregroundStyle(.orange)
+                HStack {
+                    Label("Controlled by \(by)", systemImage: "dot.radiowaves.left.and.right")
+                        .font(.caption).foregroundStyle(.orange)
+                    Spacer()
+                    Button("Disconnect") { manager.disconnectControlled() }
+                        .controlSize(.small)
+                }
             } else {
                 Text("\(discovery.peers.count) nearby device\(discovery.peers.count == 1 ? "" : "s")")
                     .font(.caption).foregroundStyle(.secondary)

@@ -135,7 +135,22 @@ struct ContentView: View {
     private var beControlledSection: some View {
         VStack(alignment: .leading, spacing: Theme.s2) {
             SectionLabel("Allow this Mac to be controlled")
-            Toggle("Accept keyboard & mouse control from trusted Macs", isOn: $settings.controlEnabled)
+            if let by = manager.controlActiveFrom {
+                HStack(spacing: Theme.s2) {
+                    StatusDot(color: .orange)
+                    Text("Being controlled by \(by)").fontWeight(.medium)
+                    Spacer()
+                    Button("Disconnect") { manager.disconnectControlled() }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                }
+                .padding(.bottom, Theme.s1)
+            }
+            Toggle("Accept keyboard & mouse control from trusted Macs", isOn: Binding(
+                get: { settings.controlEnabled },
+                set: { on in
+                    settings.controlEnabled = on
+                    if !on { manager.disconnectControlled() }   // ending acceptance ends any session
+                }))
                 .toggleStyle(.switch)
             Text("Window mode needs no permissions. Edge mode (bump a screen edge) needs Accessibility + Input Monitoring — grant them in Settings → Control.")
                 .font(.caption).foregroundStyle(.secondary)
