@@ -12,6 +12,8 @@ final class AppSettings: ObservableObject {
     /// Drive the other Mac by bumping a screen edge (needs Accessibility + Input Monitoring).
     /// Off = window mode (click to capture, no permissions).
     @Published var useEdgeMode: Bool { didSet { defaults.set(useEdgeMode, forKey: Keys.edgeMode) } }
+    /// Which display's edge hands off (CGDirectDisplayID). 0 = whole desktop / any outer edge.
+    @Published var handoffDisplayID: UInt32 { didSet { defaults.set(Int(handoffDisplayID), forKey: Keys.handoffDisplay) } }
     /// Run without a Dock icon. Combined with `menuBarVisible` → Dock / Menu bar / Both.
     @Published var hideDockIcon: Bool { didSet { defaults.set(hideDockIcon, forKey: Keys.hideDock) } }
     @Published var menuBarVisible: Bool { didSet { defaults.set(menuBarVisible, forKey: Keys.menuBar) } }
@@ -29,6 +31,7 @@ final class AppSettings: ObservableObject {
         static let control = "kmctrl.controlEnabled"
         static let controlEdge = "kmctrl.controlEdge"
         static let edgeMode = "kmctrl.useEdgeMode"
+        static let handoffDisplay = "kmctrl.handoffDisplayID"
         static let hideDock = "kmctrl.hideDockIcon"
         static let menuBar = "kmctrl.menuBarVisible"
     }
@@ -40,6 +43,7 @@ final class AppSettings: ObservableObject {
         controlEnabled = defaults.bool(forKey: Keys.control)
         controlEdge = ScreenEdge(rawValue: defaults.string(forKey: Keys.controlEdge) ?? "") ?? .right
         useEdgeMode = defaults.bool(forKey: Keys.edgeMode)
+        handoffDisplayID = UInt32(defaults.integer(forKey: Keys.handoffDisplay))
         hideDockIcon = defaults.bool(forKey: Keys.hideDock)
         menuBarVisible = defaults.object(forKey: Keys.menuBar) as? Bool ?? true
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {

@@ -22,6 +22,7 @@ final class ControlHost: ObservableObject {
     /// + Input Monitoring); window mode (click-to-capture) needs no permissions.
     var edgeModeEnabled = false
     var controlEdge: ScreenEdge = .right     // which edge hands off (set by UI)
+    var controlDisplayID: UInt32 = 0         // which monitor's edge (0 = whole desktop)
 
     // Mouse-move coalescing — accumulate deltas in a lock-guarded buffer, flushed on a
     // precise off-main timer so the cursor stream has a steady cadence (no Task.sleep /
@@ -113,6 +114,7 @@ final class ControlHost: ObservableObject {
         let buf = moveBuffer; let box = linkBox; let q = flushQueue
         let edge = EdgeCapture(
             edge: controlEdge,
+            displayID: controlDisplayID,
             forwardMove: { dx, dy, flags in buf.add(dx: dx, dy: dy, flags: flags) },
             forwardDiscrete: { ce in
                 q.async {
@@ -164,7 +166,7 @@ final class ControlHost: ObservableObject {
         CGAssociateMouseAndMouseCursorPosition(1)   // always restore the cursor
         CGDisplayShowCursor(CGMainDisplayID())
         if warpInsideEdge {                         // move off the edge so it won't re-trigger
-            let b = EdgeCapture.desktopBounds()     // whole desktop, so we land off the outer edge
+            let b = EdgeCapture.bounds(forDisplay: controlDisplayID)  // the chosen monitor's edge
             let p: CGPoint
             switch controlEdge {
             case .right:  p = CGPoint(x: b.maxX - 60, y: b.midY)

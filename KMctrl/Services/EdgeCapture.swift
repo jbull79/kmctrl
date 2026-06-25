@@ -11,9 +11,9 @@ import CoreGraphics
 final class EdgeCapture: @unchecked Sendable {
     private var tap: CFMachPort?
     private var runLoop: CFRunLoop?
-    /// Union of every active display — so on a multi-monitor setup the hand-off edge is the
-    /// OUTER boundary of the whole desktop, not the main display's (possibly interior) edge.
-    private let bounds = EdgeCapture.desktopBounds()
+    /// The display whose edge hands off (or the whole-desktop union when 0). Multi-monitor:
+    /// the bump fires only on this display's chosen edge, within that display's extent.
+    private let bounds: CGRect
     private let lock = NSLock()
     private var capturing = false
 
@@ -26,6 +26,16 @@ final class EdgeCapture: @unchecked Sendable {
         return ids.reduce(CGRect.null) { $0.union(CGDisplayBounds($1)) }
     }
 
+    /// CG bounds for a chosen display id (0 / inactive → whole-desktop union).
+    static func bounds(forDisplay id: UInt32) -> CGRect {
+        guard id != 0 else { return desktopBounds() }
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        return ids.contains(id) ? CGDisplayBounds(id) : desktopBounds()
+    }
+
     private let edge: ScreenEdge
     private let forwardMove: @Sendable (Double, Double, UInt64) -> Void
     private let forwardDiscrete: @Sendable (ControlEvent) -> Void
@@ -33,10 +43,12 @@ final class EdgeCapture: @unchecked Sendable {
     private let onEnd: @Sendable () -> Void
 
     init(edge: ScreenEdge,
+         displayID: UInt32 = 0,
          forwardMove: @escaping @Sendable (Double, Double, UInt64) -> Void,
          forwardDiscrete: @escaping @Sendable (ControlEvent) -> Void,
          onBegin: @escaping @Sendable () -> Void,
          onEnd: @escaping @Sendable () -> Void) {
+        self.bounds = EdgeCapture.bounds(forDisplay: displayID)
         self.edge = edge
         self.forwardMove = forwardMove
         self.forwardDiscrete = forwardDiscrete
@@ -45,11 +57,12 @@ final class EdgeCapture: @unchecked Sendable {
     }
 
     private func atEdge(_ p: CGPoint) -> Bool {
-        switch edge {
-        case .right:  return p.x >= bounds.maxX - 2
-        case .left:   return p.x <= bounds.minX + 1
-        case .top:    return p.y <= bounds.minY + 1
-        case .bottom: return p.y >= bounds.maxY - 2
+        let b = bounds
+        switch edge {                                   // constrain the perpendicular axis to
+        case .right:  return p.x >= b.maxX - 2 && p.y >= b.minY && p.y <= b.maxY   // this display's
+        case .left:   return p.x <= b.minX + 1 && p.y >= b.minY && p.y <= b.maxY   // extent, so the
+        case .top:    return p.y <= b.minY + 1 && p.x >= b.minX && p.x <= b.maxX   // bump fires only
+        case .bottom: return p.y >= b.maxY - 2 && p.x >= b.minX && p.x <= b.maxX   // on that monitor
         }
     }
 

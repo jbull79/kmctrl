@@ -126,6 +126,7 @@ struct ContentView: View {
     private func startControl(_ peer: Peer) {
         host.edgeModeEnabled = settings.useEdgeMode   // window mode unless edge mode is on
         host.controlEdge = settings.controlEdge
+        host.controlDisplayID = settings.handoffDisplayID
         host.connect(to: peer, localName: settings.deviceName)
     }
 
