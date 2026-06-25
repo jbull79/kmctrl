@@ -11,9 +11,20 @@ import CoreGraphics
 final class EdgeCapture: @unchecked Sendable {
     private var tap: CFMachPort?
     private var runLoop: CFRunLoop?
-    private let bounds = CGDisplayBounds(CGMainDisplayID())
+    /// Union of every active display — so on a multi-monitor setup the hand-off edge is the
+    /// OUTER boundary of the whole desktop, not the main display's (possibly interior) edge.
+    private let bounds = EdgeCapture.desktopBounds()
     private let lock = NSLock()
     private var capturing = false
+
+    static func desktopBounds() -> CGRect {
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        guard count > 0 else { return CGDisplayBounds(CGMainDisplayID()) }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        return ids.reduce(CGRect.null) { $0.union(CGDisplayBounds($1)) }
+    }
 
     private let edge: ScreenEdge
     private let forwardMove: @Sendable (Double, Double, UInt64) -> Void

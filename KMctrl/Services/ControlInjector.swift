@@ -31,7 +31,7 @@ final class ControlInjector: @unchecked Sendable {
     private let drainFactor = 0.25
 
     init() {
-        bounds = CGDisplayBounds(CGMainDisplayID())
+        bounds = EdgeCapture.desktopBounds()   // span all displays on the controlled Mac
         cursor = CGPoint(x: bounds.midX, y: bounds.midY)
     }
 

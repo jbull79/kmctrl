@@ -164,7 +164,7 @@ final class ControlHost: ObservableObject {
         CGAssociateMouseAndMouseCursorPosition(1)   // always restore the cursor
         CGDisplayShowCursor(CGMainDisplayID())
         if warpInsideEdge {                         // move off the edge so it won't re-trigger
-            let b = CGDisplayBounds(CGMainDisplayID())
+            let b = EdgeCapture.desktopBounds()     // whole desktop, so we land off the outer edge
             let p: CGPoint
             switch controlEdge {
             case .right:  p = CGPoint(x: b.maxX - 60, y: b.midY)
