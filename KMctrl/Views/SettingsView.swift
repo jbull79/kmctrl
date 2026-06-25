@@ -29,6 +29,7 @@ struct SettingsView: View {
         TabView {
             general.tabItem { Label("General", systemImage: "gear") }
             control.tabItem { Label("Control", systemImage: "keyboard") }
+            LogsView().tabItem { Label("Diagnostics", systemImage: "doc.text.magnifyingglass") }
         }
         .frame(width: 460, height: 440)
         .onAppear {

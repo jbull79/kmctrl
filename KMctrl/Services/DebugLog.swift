@@ -1,9 +1,9 @@
 import Foundation
 
-/// Lightweight in-app diagnostic log. Call `DebugLog.log(...)` from anywhere (any
-/// thread/actor); it hops to the main actor to update the observable buffer and also
-/// mirrors to the unified log. Surfaced in the app's "Logs" view with a Copy button so
-/// users can share a transcript when a transfer fails.
+/// Lightweight in-app diagnostic log, gated by a user toggle. When diagnostics are off,
+/// `DebugLog.log(...)` is a no-op (nothing buffered or written). Surfaced in Settings →
+/// Diagnostics with an enable switch + Copy/Clear, so users can capture and share a
+/// transcript only when troubleshooting.
 @MainActor
 final class DebugLog: ObservableObject {
     static let shared = DebugLog()
@@ -17,17 +17,28 @@ final class DebugLog: ObservableObject {
         let message: String
     }
 
+    private static let key = "kmctrl.diagnosticsEnabled"
+    /// Nonisolated mirror so the `log(...)` fast path can check it from any thread.
+    nonisolated(unsafe) private static var capture = UserDefaults.standard.bool(forKey: key)
+
     @Published private(set) var entries: [Entry] = []
+    @Published var enabled: Bool {
+        didSet {
+            UserDefaults.standard.set(enabled, forKey: Self.key)
+            Self.capture = enabled
+        }
+    }
+
+    private init() { enabled = UserDefaults.standard.bool(forKey: Self.key) }
 
     private static let stamp: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss.SSS"
-        return f
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f
     }()
 
-    /// Safe to call from any context.
+    /// Safe to call from any context. No-op unless diagnostics are enabled.
     nonisolated static func log(_ message: String, _ level: Level = .info) {
-        NSLog("NetCatch [%@] %@", level.rawValue, message)
+        guard capture else { return }
+        NSLog("KMctrl [%@] %@", level.rawValue, message)
         Task { @MainActor in shared.append(message, level) }
     }
 
