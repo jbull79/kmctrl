@@ -87,13 +87,21 @@ struct SettingsView: View {
         Form {
             Section {
                 Toggle("Accept control from trusted Macs", isOn: $settings.controlEnabled)
-                Picker("Hand-off edge", selection: $settings.controlEdge) {
-                    ForEach(ScreenEdge.allCases) { Text($0.label).tag($0) }
-                }
             } header: {
                 Text("This Mac")
             } footer: {
-                Text("Hand-off edge is the screen edge that passes control in edge mode.")
+                Text("When on, another trusted Mac can control this one (you confirm the first time).")
+            }
+
+            Section {
+                Toggle("Use edge mode to drive another Mac", isOn: $settings.useEdgeMode)
+                ScreenArrangementView(edge: $settings.controlEdge)
+                Text("Remote Mac is to the **\(settings.controlEdge.label.lowercased())** — bump that edge to take control; ⌃⌥⌘ releases.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: {
+                Text("Edge hand-off arrangement")
+            } footer: {
+                Text("Drag the remote Mac to the side it physically sits on. Edge mode needs Accessibility + Input Monitoring (below); window mode (click-to-capture) needs neither.")
             }
 
             Section {

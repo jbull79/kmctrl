@@ -124,7 +124,7 @@ struct ContentView: View {
     }
 
     private func startControl(_ peer: Peer) {
-        host.edgeModeEnabled = false                 // window mode (no permissions needed)
+        host.edgeModeEnabled = settings.useEdgeMode   // window mode unless edge mode is on
         host.controlEdge = settings.controlEdge
         host.connect(to: peer, localName: settings.deviceName)
     }
