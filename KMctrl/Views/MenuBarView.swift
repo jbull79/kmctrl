@@ -10,6 +10,7 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     // Live cross-window mirror of the accept-control switch (see ContentView).
     @AppStorage(AppSettings.Keys.control) private var acceptControl = false
+    @AppStorage(AppSettings.Keys.keepAwake) private var keepAwake = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.s2) {
@@ -38,6 +39,16 @@ struct MenuBarView: View {
                 .onChange(of: acceptControl) { on in
                     settings.controlEnabled = on
                     if !on { manager.disconnectControlled() }
+                }
+            Toggle("Keep active (prevent Away)", isOn: $keepAwake)
+                .toggleStyle(.switch).controlSize(.mini)
+                .onChange(of: keepAwake) { on in
+                    settings.keepAwakeEnabled = on
+                    model.keepAwake.setEnabled(on)
+                    if on {
+                        manager.readiness.refresh()
+                        if !manager.readiness.accessibility { manager.readiness.requestAccessibility() }
+                    }
                 }
             Toggle("Show Dock icon", isOn: Binding(
                 get: { !settings.hideDockIcon }, set: { model.setHideDockIcon(!$0) }))

@@ -17,6 +17,9 @@ final class AppSettings: ObservableObject {
     /// Run without a Dock icon. Combined with `menuBarVisible` → Dock / Menu bar / Both.
     @Published var hideDockIcon: Bool { didSet { defaults.set(hideDockIcon, forKey: Keys.hideDock) } }
     @Published var menuBarVisible: Bool { didSet { defaults.set(menuBarVisible, forKey: Keys.menuBar) } }
+    /// Keep this Mac "active" (post a harmless F15 on an interval) so presence apps don't
+    /// report Away. Local-only; needs Accessibility.
+    @Published var keepAwakeEnabled: Bool { didSet { defaults.set(keepAwakeEnabled, forKey: Keys.keepAwake) } }
     /// Which transport methods the connector may use, by raw value.
     @Published var enabledTransports: Set<String> {
         didSet { defaults.set(Array(enabledTransports), forKey: Keys.transports) }
@@ -34,6 +37,7 @@ final class AppSettings: ObservableObject {
         static let handoffDisplay = "kmctrl.handoffDisplayID"
         static let hideDock = "kmctrl.hideDockIcon"
         static let menuBar = "kmctrl.menuBarVisible"
+        static let keepAwake = "kmctrl.keepAwakeEnabled"
     }
 
     init() {
@@ -46,6 +50,7 @@ final class AppSettings: ObservableObject {
         handoffDisplayID = UInt32(defaults.integer(forKey: Keys.handoffDisplay))
         hideDockIcon = defaults.bool(forKey: Keys.hideDock)
         menuBarVisible = defaults.object(forKey: Keys.menuBar) as? Bool ?? true
+        keepAwakeEnabled = defaults.bool(forKey: Keys.keepAwake)
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {
             enabledTransports = Set(stored)
         } else {

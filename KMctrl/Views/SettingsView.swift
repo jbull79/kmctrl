@@ -26,6 +26,7 @@ struct SettingsView: View {
     @State private var localIP: String?
     // Live cross-window mirror of the accept-control switch (see ContentView).
     @AppStorage(AppSettings.Keys.control) private var acceptControl = false
+    @AppStorage(AppSettings.Keys.keepAwake) private var keepAwake = false
 
     var body: some View {
         TabView {
@@ -37,6 +38,7 @@ struct SettingsView: View {
         .onAppear {
             portText = String(settings.port)
             localIP = LocalNetwork.ipv4Address()
+            manager.readiness.refresh()
         }
     }
 
@@ -67,6 +69,36 @@ struct SettingsView: View {
                 Text("Appearance")
             } footer: {
                 Text("Run from the Dock, the menu bar, or both.")
+            }
+            Section {
+                Toggle("Keep this Mac active (prevent Away)", isOn: $keepAwake)
+                    .onChange(of: keepAwake) { on in
+                        settings.keepAwakeEnabled = on
+                        model.keepAwake.setEnabled(on)
+                        manager.readiness.refresh()
+                        if on && !manager.readiness.accessibility {
+                            manager.readiness.requestAccessibility()   // prompt + open the pane
+                        }
+                    }
+                if keepAwake {
+                    if manager.readiness.accessibility {
+                        Label("Active — keeping this Mac awake.", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    } else {
+                        HStack(spacing: Theme.s2) {
+                            Label("Needs Accessibility — not working until granted (may be blocked by MDM).",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption).foregroundStyle(.orange)
+                            Spacer()
+                            Button("Grant…") { manager.readiness.requestAccessibility() }
+                                .controlSize(.small)
+                        }
+                    }
+                }
+            } header: {
+                Text("Presence")
+            } footer: {
+                Text("Posts a harmless F15 keystroke every few minutes so this Mac stays marked active in Teams/Slack. Local only; nothing is sent to another Mac. Needs Accessibility — a managed (MDM) Mac may block it.")
             }
             Section {
                 ForEach(TransportStrategy.allCases, id: \.self) { s in

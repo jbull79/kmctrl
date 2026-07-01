@@ -9,6 +9,7 @@ final class AppModel: ObservableObject {
     let settings = AppSettings()
     let manager: ControlManager      // controlled side (listen + inject)
     let host = ControlHost()         // controlling side (capture + send)
+    let keepAwake = KeepAwake()      // local presence keep-alive
 
     private init() {
         manager = ControlManager(settings: settings)
@@ -17,6 +18,7 @@ final class AppModel: ObservableObject {
     func start() {
         manager.startServices()
         applyActivationPolicy()
+        if settings.keepAwakeEnabled { keepAwake.start() }
     }
 
     /// Dock icon visibility. The menu-bar item is controlled separately (settings.menuBarVisible).
