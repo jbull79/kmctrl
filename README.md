@@ -8,6 +8,19 @@ Built for the case NetCatch was: bridging a **locked-down / MDM work Mac** to a 
 one. **Window mode needs no permissions** (works on a managed Mac), so you can drive the
 other machine without admin rights.
 
+## Download
+
+**[⬇ KMctrl 0.6.0 (Debug) — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.6.0-debug/KMctrl-0.6.0-debug.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
+
+Unsigned, ad-hoc, **Apple Silicon only** (won't run on Intel). macOS quarantines
+downloaded unsigned apps — clear it (no admin needed on your own files):
+
+```bash
+xattr -dr com.apple.quarantine ~/Applications/KMctrl.app && open ~/Applications/KMctrl.app
+```
+
+If it still won't open, your MDM enforces Gatekeeper — build locally in Xcode instead.
+
 ## How it works
 
 - **Discovery** — Bonjour (`_kmctrl._tcp`); peers appear automatically.
