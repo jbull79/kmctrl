@@ -20,6 +20,13 @@ final class AppSettings: ObservableObject {
     /// Keep this Mac "active" (post a harmless F15 on an interval) so presence apps don't
     /// report Away. Local-only; needs Accessibility.
     @Published var keepAwakeEnabled: Bool { didSet { defaults.set(keepAwakeEnabled, forKey: Keys.keepAwake) } }
+    /// EXPERIMENTAL: encode forwarded control events as fixed binary instead of JSON on the
+    /// controlling Mac (kills per-event JSONEncoder/Decoder cost). Self-describing on the
+    /// wire — the controlled Mac auto-detects, so only the controller's flag matters.
+    @Published var binaryControl: Bool { didSet { defaults.set(binaryControl, forKey: Keys.binaryControl) } }
+    /// EXPERIMENTAL: mouse-move coalescing flush cadence in ms (controlling Mac). Lower =
+    /// smoother but more packets/CPU. One of `flushIntervalChoices`.
+    @Published var flushIntervalMs: Int { didSet { defaults.set(flushIntervalMs, forKey: Keys.flushInterval) } }
     /// Which transport methods the connector may use, by raw value.
     @Published var enabledTransports: Set<String> {
         didSet { defaults.set(Array(enabledTransports), forKey: Keys.transports) }
@@ -38,7 +45,12 @@ final class AppSettings: ObservableObject {
         static let hideDock = "kmctrl.hideDockIcon"
         static let menuBar = "kmctrl.menuBarVisible"
         static let keepAwake = "kmctrl.keepAwakeEnabled"
+        static let binaryControl = "kmctrl.binaryControl"
+        static let flushInterval = "kmctrl.flushIntervalMs"
     }
+
+    /// Allowed flush cadences (ms) for the experimental interval knob.
+    static let flushIntervalChoices = [4, 8, 16]
 
     init() {
         deviceName = defaults.string(forKey: Keys.deviceName) ?? Host.current().localizedName ?? "My Mac"
@@ -51,6 +63,9 @@ final class AppSettings: ObservableObject {
         hideDockIcon = defaults.bool(forKey: Keys.hideDock)
         menuBarVisible = defaults.object(forKey: Keys.menuBar) as? Bool ?? true
         keepAwakeEnabled = defaults.bool(forKey: Keys.keepAwake)
+        binaryControl = defaults.bool(forKey: Keys.binaryControl)
+        let storedInterval = defaults.integer(forKey: Keys.flushInterval)
+        flushIntervalMs = AppSettings.flushIntervalChoices.contains(storedInterval) ? storedInterval : 8
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {
             enabledTransports = Set(stored)
         } else {
