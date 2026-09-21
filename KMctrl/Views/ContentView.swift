@@ -130,6 +130,8 @@ struct ContentView: View {
         host.edgeModeEnabled = settings.useEdgeMode   // window mode unless edge mode is on
         host.controlEdge = settings.controlEdge
         host.controlDisplayID = settings.handoffDisplayID
+        host.useBinaryControl = settings.binaryControl        // experimental codec flag
+        host.flushIntervalMs = settings.flushIntervalMs       // experimental cadence knob
         host.connect(to: peer, localName: settings.deviceName)
     }
 

@@ -152,4 +152,38 @@ final class PeerLink: @unchecked Sendable {
     func receiveSecureObject<T: Decodable>(_ type: T.Type) async throws -> T {
         try JSONDecoder().decode(type, from: try await receiveSecure())
     }
+
+    // MARK: Control-event fast path (feature-flagged codec)
+
+    /// Leading sentinel byte marking a binary-codec control frame. JSON payloads always
+    /// begin with `{` (0x7B), never 0x01, so the peer disambiguates by content — no
+    /// handshake negotiation. Flag OFF sends bare JSON, byte-identical to the legacy
+    /// protocol, so an un-updated peer still interoperates when binary is disabled.
+    private static let binaryControlTag: UInt8 = 0x01
+
+    /// Send a control event on the low-latency sync path. `binary` picks the wire codec.
+    /// Mirrors `sendSecureObjectSync`: POSIX transport only (returns false otherwise).
+    func sendControlEventSync(_ event: ControlEvent, binary: Bool) -> Bool {
+        guard let key = sessionKey, let posix = stream as? POSIXByteStream else { return false }
+        let payload: Data
+        if binary {
+            var d = Data([PeerLink.binaryControlTag]); d.append(event.encodedBinary()); payload = d
+        } else {
+            guard let json = try? JSONEncoder().encode(event) else { return false }
+            payload = json
+        }
+        guard let sealed = try? CryptoService.seal(payload, key: key) else { return false }
+        return posix.sendFrameSync(sealed)
+    }
+
+    /// Receive one control event, auto-detecting the codec from the payload's first byte.
+    /// Always handles both JSON and binary, so the sender's flag needs no coordination.
+    func receiveControlEvent() async throws -> ControlEvent {
+        guard let key = sessionKey else { throw LinkError.notReady }
+        let plain = try CryptoService.open(try await stream.receiveFrame(), key: key)
+        if plain.first == PeerLink.binaryControlTag, plain.count == ControlEvent.binarySize + 1 {
+            return try ControlEvent(binary: plain.dropFirst())
+        }
+        return try JSONDecoder().decode(ControlEvent.self, from: plain)   // legacy / flag-off JSON
+    }
 }

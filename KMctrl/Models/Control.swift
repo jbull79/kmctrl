@@ -61,3 +61,69 @@ struct ControlEvent: Codable {
     var keyCode: Int = 0         // virtual keycode
     var flags: UInt64 = 0        // CGEventFlags raw (modifier state)
 }
+
+// MARK: - Binary wire codec (feature-flagged fast path)
+
+/// Thrown when a binary control frame is the wrong size or names an unknown kind.
+enum ControlCodecError: Error { case malformed }
+
+extension ControlEventKind {
+    /// Stable 1-byte wire codes for the binary codec. APPEND-ONLY — never reorder or
+    /// remove, or you break decoding of frames from other app versions.
+    static let wireOrder: [ControlEventKind] = [
+        .mouseMove, .mouseDown, .mouseUp, .scroll,
+        .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats
+    ]
+    var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
+    init?(wireByte: UInt8) {
+        let i = Int(wireByte)
+        guard i < ControlEventKind.wireOrder.count else { return nil }
+        self = ControlEventKind.wireOrder[i]
+    }
+}
+
+private func appendBE<T: FixedWidthInteger>(_ data: inout Data, _ value: T) {
+    var be = value.bigEndian
+    withUnsafeBytes(of: &be) { data.append(contentsOf: $0) }
+}
+
+private func readBE<T: FixedWidthInteger>(_ bytes: [UInt8], _ offset: Int, _: T.Type) -> T {
+    var v: T = 0
+    for i in 0..<MemoryLayout<T>.size { v = (v << 8) | T(bytes[offset + i]) }
+    return v
+}
+
+extension ControlEvent {
+    /// Fixed 44-byte layout (big-endian; Doubles as their IEEE-754 bit pattern):
+    /// kind[1] button[1] keyCode[2] flags[8] dx[8] dy[8] scrollX[8] scrollY[8].
+    static let binarySize = 44
+
+    /// Encode without JSON reflection or per-event heap churn — the whole point of the
+    /// binary control flag. Paired with `init(binary:)`; round-trip is exact.
+    func encodedBinary() -> Data {
+        var d = Data(capacity: ControlEvent.binarySize)
+        d.append(kind.wireByte)
+        d.append(UInt8(truncatingIfNeeded: button))
+        appendBE(&d, UInt16(truncatingIfNeeded: keyCode))
+        appendBE(&d, flags)
+        appendBE(&d, dx.bitPattern)
+        appendBE(&d, dy.bitPattern)
+        appendBE(&d, scrollX.bitPattern)
+        appendBE(&d, scrollY.bitPattern)
+        return d
+    }
+
+    init(binary data: Data) throws {
+        guard data.count == ControlEvent.binarySize else { throw ControlCodecError.malformed }
+        let b = [UInt8](data)
+        guard let kind = ControlEventKind(wireByte: b[0]) else { throw ControlCodecError.malformed }
+        self.init(kind: kind)
+        button  = Int(b[1])
+        keyCode = Int(readBE(b, 2, UInt16.self))
+        flags   = readBE(b, 4, UInt64.self)
+        dx      = Double(bitPattern: readBE(b, 12, UInt64.self))
+        dy      = Double(bitPattern: readBE(b, 20, UInt64.self))
+        scrollX = Double(bitPattern: readBE(b, 28, UInt64.self))
+        scrollY = Double(bitPattern: readBE(b, 36, UInt64.self))
+    }
+}

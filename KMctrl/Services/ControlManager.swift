@@ -161,7 +161,7 @@ final class ControlManager: ObservableObject {
                     injector.onReturn = { _ = link.sendSecureObjectSync(ControlReturn()) }
                 }
                 while true {
-                    let event = try await link.receiveSecureObject(ControlEvent.self)
+                    let event = try await link.receiveControlEvent()   // auto-detects JSON/binary codec
                     if event.kind == .hostStats { continue }
                     injector.apply(event)
                 }

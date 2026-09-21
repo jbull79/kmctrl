@@ -23,6 +23,10 @@ final class ControlHost: ObservableObject {
     var edgeModeEnabled = false
     var controlEdge: ScreenEdge = .right     // which edge hands off (set by UI)
     var controlDisplayID: UInt32 = 0         // which monitor's edge (0 = whole desktop)
+    /// EXPERIMENTAL flags, set by the UI before `connect` (read at capture setup, so a
+    /// change takes effect on the next connection — reconnect to A/B them).
+    var useBinaryControl = false             // binary vs JSON control-event codec
+    var flushIntervalMs = 8                  // mouse-move coalescing cadence
 
     // Mouse-move coalescing — accumulate deltas in a lock-guarded buffer, flushed on a
     // precise off-main timer so the cursor stream has a steady cadence (no Task.sleep /
@@ -89,13 +93,13 @@ final class ControlHost: ObservableObject {
     /// pending mouse move first so it stays correctly positioned. Synchronous write — no
     /// async send-task that would batch frames and clump them on the wire.
     private func sendOnQueue(_ event: ControlEvent) {
-        let buf = moveBuffer; let box = linkBox
+        let buf = moveBuffer; let box = linkBox; let binary = useBinaryControl
         flushQueue.async { [weak self] in
             guard let link = box.link else { return }
             if let m = buf.take() {
-                _ = link.sendSecureObjectSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags))
+                _ = link.sendControlEventSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags), binary: binary)
             }
-            if !link.sendSecureObjectSync(event) {
+            if !link.sendControlEventSync(event, binary: binary) {
                 Task { @MainActor in self?.disconnect() }
             }
         }
@@ -114,7 +118,7 @@ final class ControlHost: ObservableObject {
     /// Start edge-bump capture (global tap). Forwarding feeds the same buffer + sync send
     /// path as window mode.
     private func startEdgeMode() {
-        let buf = moveBuffer; let box = linkBox; let q = flushQueue
+        let buf = moveBuffer; let box = linkBox; let q = flushQueue; let binary = useBinaryControl
         let edge = EdgeCapture(
             edge: controlEdge,
             displayID: controlDisplayID,
@@ -123,9 +127,9 @@ final class ControlHost: ObservableObject {
                 q.async {
                     guard let link = box.link else { return }
                     if let m = buf.take() {
-                        _ = link.sendSecureObjectSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags))
+                        _ = link.sendControlEventSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags), binary: binary)
                     }
-                    _ = link.sendSecureObjectSync(ce)
+                    _ = link.sendControlEventSync(ce, binary: binary)
                 }
             },
             onBegin: { [weak self] in Task { @MainActor in self?.enterCapture() } },
@@ -187,16 +191,17 @@ final class ControlHost: ObservableObject {
 
     private func startFlushTimer() {
         flushTimer?.cancel()
-        let buf = moveBuffer; let box = linkBox
+        let buf = moveBuffer; let box = linkBox; let binary = useBinaryControl
+        let intervalMs = AppSettings.flushIntervalChoices.contains(flushIntervalMs) ? flushIntervalMs : 8
         let timer = DispatchSource.makeTimerSource(queue: flushQueue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .nanoseconds(0))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(intervalMs), leeway: .nanoseconds(0))
         var sent = 0, ticks = 0
         var window = DispatchTime.now()
         timer.setEventHandler { [weak self] in
             guard let link = box.link else { return }
             ticks += 1
             if let m = buf.take() {
-                if link.sendSecureObjectSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags)) {
+                if link.sendControlEventSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags), binary: binary) {
                     sent += 1
                 } else {
                     Task { @MainActor in self?.disconnect() }
@@ -204,8 +209,8 @@ final class ControlHost: ObservableObject {
             }
             let now = DispatchTime.now()
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {
-                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s)")
-                _ = link.sendSecureObjectSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks)))
+                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(binary ? "binary" : "json"))")
+                _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks)), binary: binary)
                 sent = 0; ticks = 0; window = now
             }
         }

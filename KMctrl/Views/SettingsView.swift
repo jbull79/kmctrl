@@ -170,6 +170,20 @@ struct SettingsView: View {
             } footer: {
                 Text("Window mode (click-to-capture) needs none of these and works on a locked-down MDM Mac. Edge mode needs Accessibility + Input Monitoring.")
             }
+
+            Section {
+                Toggle("Binary control protocol", isOn: $settings.binaryControl)
+                Picker("Mouse flush interval", selection: $settings.flushIntervalMs) {
+                    ForEach(AppSettings.flushIntervalChoices, id: \.self) { ms in
+                        Text("\(ms) ms").tag(ms)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Experimental — input latency")
+            } footer: {
+                Text("Binary protocol encodes forwarded input as compact binary instead of JSON (removes per-event encode/decode cost). It's self-describing on the wire, so you only need it on the Mac doing the controlling. Flush interval sets how often coalesced mouse moves are sent — lower is smoother but more packets. Both take effect on the next connection: reconnect after changing them to A/B the feel.")
+            }
         }
         .formStyle(.grouped)
         .onAppear { manager.readiness.refresh() }
