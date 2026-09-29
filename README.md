@@ -10,7 +10,7 @@ other machine without admin rights.
 
 ## Download
 
-**[⬇ KMctrl 0.6.0 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.6.0/KMctrl-0.6.0.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
+**[⬇ KMctrl 0.7.0 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.7.0/KMctrl-0.7.0.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
 
 Unsigned, ad-hoc, **Apple Silicon only** (won't run on Intel). macOS quarantines
 downloaded unsigned apps — clear it (no admin needed on your own files):
