@@ -162,6 +162,10 @@ final class ControlManager: ObservableObject {
                 }
                 while true {
                     let event = try await link.receiveControlEvent()   // auto-detects JSON/binary codec
+                    if event.kind == .ping {
+                        _ = link.sendSecureObjectSync(ControlReturn(ok: true, pong: event.dx))   // bounce timestamp back
+                        continue
+                    }
                     if event.kind == .hostStats { continue }
                     injector.apply(event)
                 }

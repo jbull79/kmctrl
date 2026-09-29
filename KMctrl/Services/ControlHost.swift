@@ -13,6 +13,19 @@ final class ControlHost: ObservableObject {
     @Published var state: State = .idle
     @Published var peerName: String?
     @Published var lastError: String?
+    /// Most recent measured control round-trip time (ms). One-way input latency ≈ this / 2.
+    @Published var lastLatencyMs: Double?
+    private var latencyMinRTT = Double.greatestFiniteMagnitude
+
+    /// Monotonic clock in ms. `nonisolated` so the off-main flush timer can stamp pings.
+    nonisolated static func nowMs() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000.0 }
+
+    private func recordLatency(_ rtt: Double) {
+        lastLatencyMs = rtt
+        latencyMinRTT = min(latencyMinRTT, rtt)
+        DebugLog.log(String(format: "control latency: RTT %.1f ms (one-way ~%.1f ms) · session min RTT %.1f ms",
+                            rtt, rtt / 2, latencyMinRTT))
+    }
 
     private var link: PeerLink?
     private var monitor: Any?
@@ -109,8 +122,13 @@ final class ControlHost: ObservableObject {
     /// control back to this Mac.
     private func startReturnReader(link: PeerLink) {
         Task { [weak self] in
-            while (try? await link.receiveSecureObject(ControlReturn.self)) != nil {
-                await MainActor.run { self?.endCapture() }
+            while let r = try? await link.receiveSecureObject(ControlReturn.self) {
+                if let sent = r.pong {
+                    let rtt = ControlHost.nowMs() - sent                 // same host clock → no sync needed
+                    await MainActor.run { self?.recordLatency(rtt) }
+                } else {
+                    await MainActor.run { self?.endCapture() }           // real return-of-control signal
+                }
             }
         }
     }
@@ -197,6 +215,7 @@ final class ControlHost: ObservableObject {
         timer.schedule(deadline: .now(), repeating: .milliseconds(intervalMs), leeway: .nanoseconds(0))
         var sent = 0, ticks = 0
         var window = DispatchTime.now()
+        var lastPing = DispatchTime.now()
         timer.setEventHandler { [weak self] in
             guard let link = box.link else { return }
             ticks += 1
@@ -208,6 +227,11 @@ final class ControlHost: ObservableObject {
                 }
             }
             let now = DispatchTime.now()
+            // Latency probe: ~5×/sec, host stamps its own clock; client bounces it back.
+            if now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
+                _ = link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs()), binary: binary)
+                lastPing = now
+            }
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {
                 DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(binary ? "binary" : "json"))")
                 _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks)), binary: binary)

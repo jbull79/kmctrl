@@ -99,6 +99,7 @@ final class POSIXByteStream: ByteStream, @unchecked Sendable {
     private let fd: Int32
     private let readQueue = DispatchQueue(label: "netcatch.posix.read")
     private let writeQueue = DispatchQueue(label: "netcatch.posix.write")
+    private let syncSendLock = NSLock()   // serialises sendFrameSync so concurrent callers can't interleave a frame
     private let closeLock = NSLock()
     private var isClosed = false
     private var closeHook: (() -> Void)?
@@ -161,6 +162,7 @@ final class POSIXByteStream: ByteStream, @unchecked Sendable {
         if closed { return false }
         var length = UInt32(data.count).bigEndian
         var frame = Data(bytes: &length, count: 4); frame.append(data)
+        syncSendLock.lock(); defer { syncSendLock.unlock() }
         return frame.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return true }
             var sent = 0

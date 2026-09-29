@@ -13,6 +13,7 @@ enum ControlEventKind: String, Codable {
     case flagsChanged
     case releaseAll   // disconnect / focus loss — client releases everything held
     case hostStats    // host→client diagnostics (dx=moves/s sent, dy=timer ticks/s); not injected
+    case ping         // host→client latency probe; client echoes dx (host timestamp) in ControlReturn.pong; not injected
 }
 
 /// Which screen edge of the controller hands off to the other Mac.
@@ -47,8 +48,11 @@ struct ControlSetup: Codable {
 }
 
 /// Sent client→host when the client's cursor hits its return edge → host takes back.
+/// Also carries latency-probe echoes: when `pong` is set it is the host timestamp from a
+/// `.ping`, bounced straight back so the host can compute round-trip time (not a return).
 struct ControlReturn: Codable {
     var ok: Bool = true
+    var pong: Double? = nil   // echoed host timestamp (ms) for the latency probe; nil = real return
 }
 
 struct ControlEvent: Codable {
@@ -72,7 +76,7 @@ extension ControlEventKind {
     /// remove, or you break decoding of frames from other app versions.
     static let wireOrder: [ControlEventKind] = [
         .mouseMove, .mouseDown, .mouseUp, .scroll,
-        .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats
+        .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping
     ]
     var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
     init?(wireByte: UInt8) {

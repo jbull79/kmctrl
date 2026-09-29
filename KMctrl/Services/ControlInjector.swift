@@ -90,8 +90,8 @@ final class ControlInjector: @unchecked Sendable {
             flags = CGEventFlags(rawValue: e.flags)
         case .releaseAll:
             releaseAll()
-        case .hostStats:
-            break
+        case .hostStats, .ping:
+            break   // control-plane only; never injected (client handles/echoes before apply)
         }
     }
 
