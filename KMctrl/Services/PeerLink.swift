@@ -69,6 +69,9 @@ final class PeerLink: @unchecked Sendable {
     private(set) var sessionKey: SymmetricKey?
     private(set) var remoteName: String = "Unknown"
     private(set) var remoteFingerprint: String = ""
+    /// Codec for the control-event send path, set once at connect. The receiver
+    /// auto-detects the format, so only the sender's choice matters.
+    var useBinaryControl = false
 
     init(stream: ByteStream) { self.stream = stream }
 
@@ -143,9 +146,15 @@ final class PeerLink: @unchecked Sendable {
     /// Synchronous encrypted send (POSIX transport only) for the low-latency control
     /// path. Returns false if not possible (e.g. NW transport) so the caller can fall back.
     func sendSecureObjectSync<T: Encodable>(_ value: T) -> Bool {
+        guard let data = try? JSONEncoder().encode(value) else { return false }
+        return sendSealedSync(data)
+    }
+
+    /// Seal `payload` and write it as one frame on the sync path (POSIX transport only).
+    /// The single place the sync-send tail (cipher + framed write) lives.
+    private func sendSealedSync(_ payload: Data) -> Bool {
         guard let key = sessionKey, let posix = stream as? POSIXByteStream,
-              let data = try? JSONEncoder().encode(value),
-              let sealed = try? CryptoService.seal(data, key: key) else { return false }
+              let sealed = try? CryptoService.seal(payload, key: key) else { return false }
         return posix.sendFrameSync(sealed)
     }
 
@@ -161,26 +170,21 @@ final class PeerLink: @unchecked Sendable {
     /// protocol, so an un-updated peer still interoperates when binary is disabled.
     private static let binaryControlTag: UInt8 = 0x01
 
-    /// Send a control event on the low-latency sync path. `binary` picks the wire codec.
-    /// Mirrors `sendSecureObjectSync`: POSIX transport only (returns false otherwise).
-    func sendControlEventSync(_ event: ControlEvent, binary: Bool) -> Bool {
-        guard let key = sessionKey, let posix = stream as? POSIXByteStream else { return false }
-        let payload: Data
-        if binary {
-            var d = Data([PeerLink.binaryControlTag]); d.append(event.encodedBinary()); payload = d
-        } else {
-            guard let json = try? JSONEncoder().encode(event) else { return false }
-            payload = json
-        }
-        guard let sealed = try? CryptoService.seal(payload, key: key) else { return false }
-        return posix.sendFrameSync(sealed)
+    /// Send a control event on the low-latency sync path using this link's codec
+    /// (`useBinaryControl`, set once at connect). JSON path reuses `sendSecureObjectSync`;
+    /// binary path prepends the sentinel tag so the peer disambiguates by content.
+    /// POSIX transport only (returns false otherwise).
+    func sendControlEventSync(_ event: ControlEvent) -> Bool {
+        guard useBinaryControl else { return sendSecureObjectSync(event) }
+        var payload = Data([PeerLink.binaryControlTag])
+        payload.append(event.encodedBinary())
+        return sendSealedSync(payload)
     }
 
     /// Receive one control event, auto-detecting the codec from the payload's first byte.
     /// Always handles both JSON and binary, so the sender's flag needs no coordination.
     func receiveControlEvent() async throws -> ControlEvent {
-        guard let key = sessionKey else { throw LinkError.notReady }
-        let plain = try CryptoService.open(try await stream.receiveFrame(), key: key)
+        let plain = try await receiveSecure()
         if plain.first == PeerLink.binaryControlTag, plain.count == ControlEvent.binarySize + 1 {
             return try ControlEvent(binary: plain.dropFirst())
         }

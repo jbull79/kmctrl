@@ -49,8 +49,13 @@ final class AppSettings: ObservableObject {
         static let flushInterval = "kmctrl.flushIntervalMs"
     }
 
-    /// Allowed flush cadences (ms) for the experimental interval knob.
+    /// Allowed flush cadences (ms) for the experimental interval knob, with the default
+    /// and the validation in one place so callers don't re-derive them.
     static let flushIntervalChoices = [4, 8, 16]
+    static let defaultFlushInterval = 8
+    static func clampedFlushInterval(_ value: Int) -> Int {
+        flushIntervalChoices.contains(value) ? value : defaultFlushInterval
+    }
 
     init() {
         deviceName = defaults.string(forKey: Keys.deviceName) ?? Host.current().localizedName ?? "My Mac"
@@ -64,8 +69,7 @@ final class AppSettings: ObservableObject {
         menuBarVisible = defaults.object(forKey: Keys.menuBar) as? Bool ?? true
         keepAwakeEnabled = defaults.bool(forKey: Keys.keepAwake)
         binaryControl = defaults.bool(forKey: Keys.binaryControl)
-        let storedInterval = defaults.integer(forKey: Keys.flushInterval)
-        flushIntervalMs = AppSettings.flushIntervalChoices.contains(storedInterval) ? storedInterval : 8
+        flushIntervalMs = AppSettings.clampedFlushInterval(defaults.integer(forKey: Keys.flushInterval))
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {
             enabledTransports = Set(stored)
         } else {

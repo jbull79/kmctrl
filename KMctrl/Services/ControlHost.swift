@@ -13,15 +13,13 @@ final class ControlHost: ObservableObject {
     @Published var state: State = .idle
     @Published var peerName: String?
     @Published var lastError: String?
-    /// Most recent measured control round-trip time (ms). One-way input latency ≈ this / 2.
-    @Published var lastLatencyMs: Double?
+    /// Session-minimum control round-trip time (ms), reported in the Diagnostics log.
     private var latencyMinRTT = Double.greatestFiniteMagnitude
 
     /// Monotonic clock in ms. `nonisolated` so the off-main flush timer can stamp pings.
     nonisolated static func nowMs() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000.0 }
 
     private func recordLatency(_ rtt: Double) {
-        lastLatencyMs = rtt
         latencyMinRTT = min(latencyMinRTT, rtt)
         DebugLog.log(String(format: "control latency: RTT %.1f ms (one-way ~%.1f ms) · session min RTT %.1f ms",
                             rtt, rtt / 2, latencyMinRTT))
@@ -39,7 +37,7 @@ final class ControlHost: ObservableObject {
     /// EXPERIMENTAL flags, set by the UI before `connect` (read at capture setup, so a
     /// change takes effect on the next connection — reconnect to A/B them).
     var useBinaryControl = false             // binary vs JSON control-event codec
-    var flushIntervalMs = 8                  // mouse-move coalescing cadence
+    var flushIntervalMs = AppSettings.defaultFlushInterval   // mouse-move coalescing cadence
 
     // Mouse-move coalescing — accumulate deltas in a lock-guarded buffer, flushed on a
     // precise off-main timer so the cursor stream has a steady cadence (no Task.sleep /
@@ -79,6 +77,7 @@ final class ControlHost: ObservableObject {
                     return
                 }
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
+                link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
                 try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge, autoReturn: self.edgeModeEnabled))
                 self.link = link
                 self.linkBox.link = link
@@ -106,13 +105,11 @@ final class ControlHost: ObservableObject {
     /// pending mouse move first so it stays correctly positioned. Synchronous write — no
     /// async send-task that would batch frames and clump them on the wire.
     private func sendOnQueue(_ event: ControlEvent) {
-        let buf = moveBuffer; let box = linkBox; let binary = useBinaryControl
+        let buf = moveBuffer; let box = linkBox
         flushQueue.async { [weak self] in
             guard let link = box.link else { return }
-            if let m = buf.take() {
-                _ = link.sendControlEventSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags), binary: binary)
-            }
-            if !link.sendControlEventSync(event, binary: binary) {
+            if let move = buf.takeEvent() { _ = link.sendControlEventSync(move) }
+            if !link.sendControlEventSync(event) {
                 Task { @MainActor in self?.disconnect() }
             }
         }
@@ -136,7 +133,7 @@ final class ControlHost: ObservableObject {
     /// Start edge-bump capture (global tap). Forwarding feeds the same buffer + sync send
     /// path as window mode.
     private func startEdgeMode() {
-        let buf = moveBuffer; let box = linkBox; let q = flushQueue; let binary = useBinaryControl
+        let buf = moveBuffer; let box = linkBox; let q = flushQueue
         let edge = EdgeCapture(
             edge: controlEdge,
             displayID: controlDisplayID,
@@ -144,10 +141,8 @@ final class ControlHost: ObservableObject {
             forwardDiscrete: { ce in
                 q.async {
                     guard let link = box.link else { return }
-                    if let m = buf.take() {
-                        _ = link.sendControlEventSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags), binary: binary)
-                    }
-                    _ = link.sendControlEventSync(ce, binary: binary)
+                    if let move = buf.takeEvent() { _ = link.sendControlEventSync(move) }
+                    _ = link.sendControlEventSync(ce)
                 }
             },
             onBegin: { [weak self] in Task { @MainActor in self?.enterCapture() } },
@@ -209,8 +204,8 @@ final class ControlHost: ObservableObject {
 
     private func startFlushTimer() {
         flushTimer?.cancel()
-        let buf = moveBuffer; let box = linkBox; let binary = useBinaryControl
-        let intervalMs = AppSettings.flushIntervalChoices.contains(flushIntervalMs) ? flushIntervalMs : 8
+        let buf = moveBuffer; let box = linkBox
+        let intervalMs = flushIntervalMs   // already validated by AppSettings
         let timer = DispatchSource.makeTimerSource(queue: flushQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(intervalMs), leeway: .nanoseconds(0))
         var sent = 0, ticks = 0
@@ -219,8 +214,8 @@ final class ControlHost: ObservableObject {
         timer.setEventHandler { [weak self] in
             guard let link = box.link else { return }
             ticks += 1
-            if let m = buf.take() {
-                if link.sendControlEventSync(ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags), binary: binary) {
+            if let move = buf.takeEvent() {
+                if link.sendControlEventSync(move) {
                     sent += 1
                 } else {
                     Task { @MainActor in self?.disconnect() }
@@ -229,12 +224,12 @@ final class ControlHost: ObservableObject {
             let now = DispatchTime.now()
             // Latency probe: ~5×/sec, host stamps its own clock; client bounces it back.
             if now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
-                _ = link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs()), binary: binary)
+                _ = link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs()))
                 lastPing = now
             }
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {
-                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(binary ? "binary" : "json"))")
-                _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks)), binary: binary)
+                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(link.useBinaryControl ? "binary" : "json"))")
+                _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks)))
                 sent = 0; ticks = 0; window = now
             }
         }
@@ -300,6 +295,11 @@ final class ControlHost: ObservableObject {
             lock.lock(); defer { lock.unlock() }
             guard dirty else { return nil }
             let r = (dx, dy, flags); dx = 0; dy = 0; dirty = false; return r
+        }
+        /// Drain the coalesced delta as a ready `.mouseMove` event, or nil if nothing pending.
+        func takeEvent() -> ControlEvent? {
+            guard let m = take() else { return nil }
+            return ControlEvent(kind: .mouseMove, dx: m.dx, dy: m.dy, flags: m.flags)
         }
     }
 
