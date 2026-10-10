@@ -172,6 +172,14 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Press \(HotkeyMonitor.label) to start controlling again", isOn: $settings.regrabHotkeyEnabled)
+            } header: {
+                Text("Re-grab hotkey")
+            } footer: {
+                Text("Works while a session is connected, from any app. ⌃⌥⌘ alone still releases. No permissions needed.")
+            }
+
+            Section {
                 HStack {
                     Slider(value: $settings.mouseSensitivity, in: AppSettings.mouseSensitivityRange, step: 0.25)
                     Text(String(format: "%.2g×", settings.mouseSensitivity))

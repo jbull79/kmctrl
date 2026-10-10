@@ -11,11 +11,21 @@ final class AppModel: ObservableObject {
     let manager: ControlManager      // controlled side (listen + inject)
     let host = ControlHost()         // controlling side (capture + send)
     let keepAwake = KeepAwake()      // local presence keep-alive
+    let hotkey: HotkeyMonitor        // ⌃⌥⌘K re-grab
     private var bag = Set<AnyCancellable>()
 
     private init() {
-        manager = ControlManager(settings: settings)
-        settings.$mouseSensitivity.sink { [host] v in host.mouseSensitivity = v }.store(in: &bag)
+        let manager = ControlManager(settings: settings)
+        let host = host
+        self.manager = manager
+        hotkey = HotkeyMonitor { host.regrab() }
+        settings.$mouseSensitivity.sink { v in host.mouseSensitivity = v }.store(in: &bag)
+        // Hotkey is live only while there is a session to re-enter.
+        settings.$regrabHotkeyEnabled.combineLatest(host.$state)
+            .map { on, state in on && state != .idle }
+            .removeDuplicates()
+            .sink { [hotkey] on in hotkey.setEnabled(on) }
+            .store(in: &bag)
     }
 
     func start() {
@@ -39,6 +49,7 @@ final class AppModel: ObservableObject {
 @main
 struct KMctrlApp: App {
     @StateObject private var model = AppModel.shared
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -50,6 +61,9 @@ struct KMctrlApp: App {
                 .environmentObject(model.host)
                 .frame(width: 440)
                 .onAppear { model.start() }
+                .onReceive(NotificationCenter.default.publisher(for: .kmctrlOpenMainWindow)) { _ in
+                    openWindow(id: "main")
+                }
         }
         .windowResizability(.contentSize)
         .windowToolbarStyle(.unified)

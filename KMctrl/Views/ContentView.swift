@@ -105,7 +105,7 @@ struct ContentView: View {
                     Label("Start controlling", systemImage: "cursorarrow.rays").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                Text("Your keyboard & mouse drive \(host.peerName ?? "the other Mac"). Press ⌃⌥⌘ to release.")
+                Text("Your keyboard & mouse drive \(host.peerName ?? "the other Mac"). Press ⌃⌥⌘ to release\(settings.regrabHotkeyEnabled ? " · \(HotkeyMonitor.label) re-grabs" : "").")
                     .font(.caption).foregroundStyle(.secondary)
             } else if host.state == .capturing {
                 Text("Controlling \(host.peerName ?? "") — press ⌃⌥⌘ to release.")

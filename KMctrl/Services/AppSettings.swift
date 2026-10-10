@@ -27,6 +27,8 @@ final class AppSettings: ObservableObject {
     /// EXPERIMENTAL: mouse-move coalescing flush cadence in ms (controlling Mac). Lower =
     /// smoother but more packets/CPU. One of `flushIntervalChoices`.
     @Published var flushIntervalMs: Int { didSet { defaults.set(flushIntervalMs, forKey: Keys.flushInterval) } }
+    /// ⌃⌥⌘K re-enters capture on an open session (Carbon hotkey, no permissions).
+    @Published var regrabHotkeyEnabled: Bool { didSet { defaults.set(regrabHotkeyEnabled, forKey: Keys.regrabHotkey) } }
     /// Multiplier applied to forwarded mouse deltas on the controlling Mac (1.0 = as-is).
     @Published var mouseSensitivity: Double { didSet { defaults.set(mouseSensitivity, forKey: Keys.mouseSensitivity) } }
     /// Which transport methods the connector may use, by raw value.
@@ -50,6 +52,7 @@ final class AppSettings: ObservableObject {
         static let binaryControl = "kmctrl.binaryControl"
         static let flushInterval = "kmctrl.flushIntervalMs"
         static let mouseSensitivity = "kmctrl.mouseSensitivity"
+        static let regrabHotkey = "kmctrl.regrabHotkeyEnabled"
     }
 
     /// Allowed flush cadences (ms) for the experimental interval knob, with the default
@@ -80,6 +83,7 @@ final class AppSettings: ObservableObject {
         binaryControl = defaults.bool(forKey: Keys.binaryControl)
         flushIntervalMs = AppSettings.clampedFlushInterval(defaults.integer(forKey: Keys.flushInterval))
         mouseSensitivity = AppSettings.clampedMouseSensitivity(defaults.double(forKey: Keys.mouseSensitivity))
+        regrabHotkeyEnabled = defaults.object(forKey: Keys.regrabHotkey) as? Bool ?? true
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {
             enabledTransports = Set(stored)
         } else {

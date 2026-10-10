@@ -218,6 +218,30 @@ final class ControlHost: ObservableObject {
         leaveCapture(warpInsideEdge: edgeModeEnabled)
     }
 
+    private var lastCaptureEnd: Date?
+
+    /// Hotkey entry point: re-enter capture on an open session. Ignored for 400 ms after a
+    /// release, because ⌃⌥⌘K pressed *while* capturing releases on the modifiers first and
+    /// the K would otherwise immediately re-capture.
+    func regrab() {
+        guard state == .connected else { return }
+        if let t = lastCaptureEnd, Date().timeIntervalSince(t) < 0.4 { return }
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = NSApp.windows.first(where: { !($0 is NSPanel) && $0.isVisible }) {
+            w.makeKeyAndOrderFront(nil)
+            beginCapture()
+        } else {
+            // Main window closed (menu-bar-only use): ask the scene to open it, then capture.
+            NotificationCenter.default.post(name: .kmctrlOpenMainWindow, object: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, self.state == .connected else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.beginCapture()
+            }
+        }
+        DebugLog.log("control host: re-grab via \(HotkeyMonitor.label)")
+    }
+
     private func enterCapture() {
         guard state == .connected else { return }
         CGDisplayHideCursor(CGMainDisplayID())
@@ -231,6 +255,7 @@ final class ControlHost: ObservableObject {
 
     private func leaveCapture(warpInsideEdge: Bool) {
         state = .connected                          // set first — prevents reentrancy
+        lastCaptureEnd = Date()
         hint.hide()
         if !edgeModeEnabled { pinWindowsToAllSpaces(false) }
         flushTimer?.cancel(); flushTimer = nil
