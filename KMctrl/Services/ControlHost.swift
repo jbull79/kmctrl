@@ -12,6 +12,8 @@ final class ControlHost: ObservableObject {
 
     @Published var state: State = .idle
     @Published var peerName: String?
+    /// The peer of the open session (for side channels such as clipboard sync).
+    @Published private(set) var currentPeer: Peer?
     @Published var lastError: String?
     /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
     @Published private(set) var peerVersion = 1
@@ -107,7 +109,7 @@ final class ControlHost: ObservableObject {
 
     func connect(to peer: Peer, localName: String) {
         guard state == .idle else { return }
-        state = .connecting; peerName = peer.name; lastError = nil
+        state = .connecting; peerName = peer.name; currentPeer = peer; lastError = nil
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -145,7 +147,7 @@ final class ControlHost: ObservableObject {
         edge?.stop(); edge = nil
         link?.cancel(); link = nil
         linkBox.link = nil
-        state = .idle; peerName = nil; peerVersion = 1
+        state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil
     }
 
     /// Send a discrete event (click/key/releaseAll) on the flush queue, flushing any

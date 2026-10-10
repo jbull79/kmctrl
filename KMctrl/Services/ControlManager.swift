@@ -26,6 +26,7 @@ final class ControlManager: ObservableObject {
     let discovery = DiscoveryService()
     let trust = TrustStore()
     let readiness = ControlReadiness()
+    let clipboard: ClipboardSync
 
     /// Peer currently controlling this Mac, if any.
     @Published var controlActiveFrom: String?
@@ -49,6 +50,7 @@ final class ControlManager: ObservableObject {
 
     init(settings: AppSettings) {
         self.settings = settings
+        clipboard = ClipboardSync(settings: settings) { settings.deviceName }
         receiver.onIncoming = { [weak self] link in self?.handleIncoming(link) }
     }
 
@@ -136,6 +138,14 @@ final class ControlManager: ObservableObject {
                     if !self.trust.isTrusted(fp) { self.trust.trust(fp, name: link.remoteName) }
                     link.setLowLatency()
                     await self.runControlReceive(link: link)
+                case .clipboard:
+                    // Trusted peers only, and only when this Mac opted in. Otherwise drop silently.
+                    guard self.settings.clipboardSyncEnabled, self.trust.isTrusted(link.remoteFingerprint) else {
+                        link.cancel(); return
+                    }
+                    let payload = try await link.receiveSecureObject(ClipboardPayload.self)
+                    link.cancel()
+                    self.clipboard.receive(payload)
                 default:
                     link.cancel()
                 }
@@ -151,6 +161,8 @@ final class ControlManager: ObservableObject {
         controlActiveFrom = name
         controlledLink = link
         badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
+        // Push our clipboard back to the controller (resolved by name from discovery).
+        clipboard.setActive(true) { [weak self] in self?.discovery.peers.first { $0.name == name } }
         DebugLog.log("control: session started from \(name)")
         await Task.detached(priority: .userInitiated) {
             let injector = ControlInjector()
@@ -177,6 +189,7 @@ final class ControlManager: ObservableObject {
                 DebugLog.log("control: session closed — \(error.localizedDescription)", .warn)
             }
         }.value
+        clipboard.setActive(false) { nil }
         controlActiveFrom = nil
         controlledLink = nil
         badge.hide()
@@ -200,7 +213,7 @@ final class ControlManager: ObservableObject {
                             controlAccessibility: readiness.accessibility,
                             controlInputMonitoring: readiness.inputMonitoring,
                             controlEventTap: readiness.eventTapCreatable,
-                            workbook: false, clipboard: false)
+                            workbook: false, clipboard: settings.clipboardSyncEnabled)
     }
 
     private func requestControlApproval(name: String, fingerprint: String) async -> Bool {

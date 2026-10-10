@@ -57,6 +57,8 @@ struct MenuBarView: View {
                         if !manager.readiness.accessibility { manager.readiness.requestAccessibility() }
                     }
                 }
+            Toggle("Sync clipboard", isOn: $settings.clipboardSyncEnabled)
+                .toggleStyle(.switch).controlSize(.mini)
             Toggle("Show Dock icon", isOn: Binding(
                 get: { !settings.hideDockIcon }, set: { model.setHideDockIcon(!$0) }))
                 .toggleStyle(.switch).controlSize(.mini)

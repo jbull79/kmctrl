@@ -194,6 +194,14 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Sync clipboard with the other Mac during a session", isOn: $settings.clipboardSyncEnabled)
+            } header: {
+                Text("Clipboard")
+            } footer: {
+                Text("Text and images copied on either Mac appear on the other while you are controlling or being controlled. Trusted Macs only; both Macs must have this on.")
+            }
+
+            Section {
                 Toggle("Press \(HotkeyMonitor.label) to start controlling again", isOn: $settings.regrabHotkeyEnabled)
             } header: {
                 Text("Re-grab hotkey")

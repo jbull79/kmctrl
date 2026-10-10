@@ -29,6 +29,18 @@ final class AppModel: ObservableObject {
             .removeDuplicates()
             .sink { [hotkey] on in hotkey.setEnabled(on) }
             .store(in: &bag)
+        // Clipboard sync follows the controlling session's lifetime.
+        host.$state.removeDuplicates()
+            .sink { state in
+                switch state {
+                case .connected where host.currentPeer != nil:
+                    manager.clipboard.setActive(true) { host.currentPeer }
+                case .idle:
+                    manager.clipboard.setActive(false) { nil }
+                default: break
+                }
+            }
+            .store(in: &bag)
     }
 
     func start() {

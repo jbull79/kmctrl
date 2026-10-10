@@ -15,6 +15,14 @@ enum SessionKind: String, Codable {
 struct ClipboardPayload: Codable {
     var text: String?
     var image: Data?
+
+    static let maxTextBytes = 1_048_576
+    static let maxImageBytes = 8_388_608
+
+    var isEmpty: Bool { (text ?? "").isEmpty && (image ?? Data()).isEmpty }
+    var isWithinLimits: Bool {
+        (text?.utf8.count ?? 0) <= Self.maxTextBytes && (image?.count ?? 0) <= Self.maxImageBytes
+    }
 }
 
 /// Sent by the initiator immediately after the handshake to select the session kind.
