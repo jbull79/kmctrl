@@ -291,6 +291,7 @@ final class ControlHost: ObservableObject {
             .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
             .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
             .otherMouseDown, .otherMouseUp, .scrollWheel,
+            .systemDefined,   // media keys (volume / brightness / playback)
             // Gestures are swallowed while capturing (never forwarded) so a horizontal
             // swipe can't trigger in-app navigation or steal the capture.
             .swipe, .gesture, .magnify, .rotate, .smartMagnify, .pressure
@@ -304,7 +305,10 @@ final class ControlHost: ObservableObject {
                     self.endCapture(); return nil
                 }
             }
-            guard let ce = self.translate(event) else { return nil }
+            guard let ce = self.translate(event) else {
+                // Only consume what we forward: unrelated system-defined events pass through.
+                return event.type == .systemDefined ? event : nil
+            }
             if ce.kind == .mouseMove {
                 self.moveBuffer.add(dx: ce.dx, dy: ce.dy, flags: ce.flags)   // coalesced, flushed by timer
             } else {
@@ -333,6 +337,11 @@ final class ControlHost: ObservableObject {
             return ce
         case .keyUp:          return ControlEvent(kind: .keyUp, keyCode: Int(e.keyCode), flags: flags)
         case .flagsChanged:   return ControlEvent(kind: .flagsChanged, flags: flags)
+        case .systemDefined:
+            guard peerVersion >= 2, e.subtype.rawValue == MediaKey.subtypeAuxControl,
+                  let mk = MediaKey.decode(data1: e.data1), MediaKey.forwarded.contains(mk.key)
+            else { return nil }
+            return ControlEvent(kind: .mediaKey, button: mk.isDown ? 1 : 0, keyCode: mk.key, flags: flags)
         default: return nil   // gestures (.swipe etc.) are swallowed during capture, never forwarded
         }
     }

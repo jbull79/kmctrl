@@ -14,6 +14,7 @@ enum ControlEventKind: String, Codable {
     case releaseAll   // disconnect / focus loss — client releases everything held
     case hostStats    // host→client diagnostics (dx=moves/s sent, dy=timer ticks/s); not injected
     case ping         // host→client latency probe; client echoes dx (host timestamp) in ControlReturn.pong; not injected
+    case mediaKey     // host→client media/aux key (keyCode = NX key type, button = 1 down / 0 up); protocol v2
 }
 
 /// Which screen edge of the controller hands off to the other Mac.
@@ -108,7 +109,8 @@ extension ControlEventKind {
     /// remove, or you break decoding of frames from other app versions.
     static let wireOrder: [ControlEventKind] = [
         .mouseMove, .mouseDown, .mouseUp, .scroll,
-        .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping
+        .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping,
+        .mediaKey
     ]
     var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
     init?(wireByte: UInt8) {

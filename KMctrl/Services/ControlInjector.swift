@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 /// Injects forwarded input on the *controlled* (home) Mac via CGEvent.post. Requires
 /// Accessibility (grantable, no admin). Runs off the main actor.
@@ -90,6 +91,8 @@ final class ControlInjector: @unchecked Sendable {
             flags = CGEventFlags(rawValue: e.flags)
         case .releaseAll:
             releaseAll()
+        case .mediaKey:
+            postMediaKey(MediaKey(key: e.keyCode, isDown: e.button == 1, isRepeat: false))
         case .hostStats, .ping:
             break   // control-plane only; never injected (client handles/echoes before apply)
         }
@@ -165,6 +168,16 @@ final class ControlInjector: @unchecked Sendable {
             event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
         }
         event?.post(tap: .cghidEventTap)
+    }
+
+    /// Media keys are not plain keyboard events: they travel as NX system-defined events, so
+    /// build one via NSEvent and post its CGEvent.
+    private func postMediaKey(_ k: MediaKey) {
+        guard let ev = NSEvent.otherEvent(with: .systemDefined, location: .zero, modifierFlags: [],
+                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                                          context: nil, subtype: Int16(MediaKey.subtypeAuxControl),
+                                          data1: k.data1, data2: -1) else { return }
+        ev.cgEvent?.post(tap: .cghidEventTap)
     }
 
     private func cgButton(_ b: Int) -> CGMouseButton { b == 1 ? .right : (b == 2 ? .center : .left) }
