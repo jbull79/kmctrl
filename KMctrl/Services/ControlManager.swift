@@ -50,7 +50,10 @@ final class ControlManager: ObservableObject {
 
     init(settings: AppSettings) {
         self.settings = settings
-        clipboard = ClipboardSync(settings: settings) { settings.deviceName }
+        clipboard = ClipboardSync(isEnabled: { settings.clipboardSyncEnabled }) { payload, peer, fp in
+            try await ClipboardSync.push(payload, to: peer, expectingFingerprint: fp,
+                                         localName: settings.deviceName, allowed: settings.enabledTransportStrategies)
+        }
         receiver.onIncoming = { [weak self] link in self?.handleIncoming(link) }
     }
 
@@ -145,7 +148,7 @@ final class ControlManager: ObservableObject {
                     }
                     let payload = try await link.receiveSecureObject(ClipboardPayload.self)
                     link.cancel()
-                    self.clipboard.receive(payload)
+                    self.clipboard.receive(payload, from: link.remoteFingerprint)
                 default:
                     link.cancel()
                 }
@@ -161,8 +164,11 @@ final class ControlManager: ObservableObject {
         controlActiveFrom = name
         controlledLink = link
         badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
-        // Push our clipboard back to the controller (resolved by name from discovery).
-        clipboard.setActive(true) { [weak self] in self?.discovery.peers.first { $0.name == name } }
+        // Push our clipboard back to the controller: resolved by name from discovery, but the
+        // push verifies the connected Mac's fingerprint against this session's before sending.
+        clipboard.setActive(true, sessionFingerprint: link.remoteFingerprint) { [weak self] in
+            self?.discovery.peers.first { $0.name == name }
+        }
         DebugLog.log("control: session started from \(name)")
         await Task.detached(priority: .userInitiated) {
             let injector = ControlInjector()
@@ -189,7 +195,7 @@ final class ControlManager: ObservableObject {
                 DebugLog.log("control: session closed — \(error.localizedDescription)", .warn)
             }
         }.value
-        clipboard.setActive(false) { nil }
+        clipboard.setActive(false, sessionFingerprint: "") { nil }
         controlActiveFrom = nil
         controlledLink = nil
         badge.hide()

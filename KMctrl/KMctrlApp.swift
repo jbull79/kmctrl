@@ -13,6 +13,9 @@ final class AppModel: ObservableObject {
     let keepAwake = KeepAwake()      // local presence keep-alive
     let hotkey: HotkeyMonitor        // ⌃⌥⌘K re-grab
     let updates = UpdateChecker()    // daily GitHub release check
+    /// The main window, captured when ContentView first appears. SwiftUI keeps it alive
+    /// when closed, so the re-grab hotkey can bring it back from menu-bar-only use.
+    weak var mainWindow: NSWindow?
     private var bag = Set<AnyCancellable>()
 
     private init() {
@@ -20,6 +23,7 @@ final class AppModel: ObservableObject {
         let host = host
         self.manager = manager
         hotkey = HotkeyMonitor { host.regrab() }
+        host.mainWindowProvider = { [weak self] in self?.mainWindow }
         let settings = settings
         updates.isEnabled = { settings.updateCheckEnabled }
         settings.$mouseSensitivity.sink { v in host.mouseSensitivity = v }.store(in: &bag)
@@ -34,9 +38,11 @@ final class AppModel: ObservableObject {
             .sink { state in
                 switch state {
                 case .connected where host.currentPeer != nil:
-                    manager.clipboard.setActive(true) { host.currentPeer }
+                    if let fp = host.peerFingerprint {
+                        manager.clipboard.setActive(true, sessionFingerprint: fp) { host.currentPeer }
+                    }
                 case .idle:
-                    manager.clipboard.setActive(false) { nil }
+                    manager.clipboard.setActive(false, sessionFingerprint: "") { nil }
                 default: break
                 }
             }
@@ -65,7 +71,6 @@ final class AppModel: ObservableObject {
 @main
 struct KMctrlApp: App {
     @StateObject private var model = AppModel.shared
-    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -78,9 +83,7 @@ struct KMctrlApp: App {
                 .environmentObject(model.updates)
                 .frame(width: 440)
                 .onAppear { model.start() }
-                .onReceive(NotificationCenter.default.publisher(for: .kmctrlOpenMainWindow)) { _ in
-                    openWindow(id: "main")
-                }
+                .background(WindowAccessor { model.mainWindow = $0 })
         }
         .windowResizability(.contentSize)
         .windowToolbarStyle(.unified)

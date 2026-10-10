@@ -1,11 +1,6 @@
 import Carbon
 import AppKit
 
-extension Notification.Name {
-    /// Ask the SwiftUI scene to (re)open the main window (e.g. before a hotkey re-grab).
-    static let kmctrlOpenMainWindow = Notification.Name("kmctrl.openMainWindow")
-}
-
 /// Global hotkey via Carbon `RegisterEventHotKey` — needs no Accessibility / Input
 /// Monitoring, so it works inside the sandbox and on an MDM-managed Mac. Fixed combo ⌃⌥⌘K
 /// (⌃⌥⌘ alone remains the release chord).

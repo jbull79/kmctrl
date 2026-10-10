@@ -14,6 +14,10 @@ final class ControlHost: ObservableObject {
     @Published var peerName: String?
     /// The peer of the open session (for side channels such as clipboard sync).
     @Published private(set) var currentPeer: Peer?
+    /// Identity fingerprint of the connected peer (authenticated at handshake).
+    @Published private(set) var peerFingerprint: String?
+    /// Supplies the main window for hotkey re-grab (set by AppModel; nil = not shown yet).
+    var mainWindowProvider: () -> NSWindow? = { nil }
     @Published var lastError: String?
     /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
     @Published private(set) var peerVersion = 1
@@ -125,6 +129,7 @@ final class ControlHost: ObservableObject {
                     return
                 }
                 self.peerVersion = ack.version
+                self.peerFingerprint = link.remoteFingerprint
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
                 try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge, autoReturn: self.edgeModeEnabled))
@@ -147,7 +152,7 @@ final class ControlHost: ObservableObject {
         edge?.stop(); edge = nil
         link?.cancel(); link = nil
         linkBox.link = nil
-        state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil
+        state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil; peerFingerprint = nil
     }
 
     /// Send a discrete event (click/key/releaseAll) on the flush queue, flushing any
@@ -235,20 +240,33 @@ final class ControlHost: ObservableObject {
     func regrab() {
         guard state == .connected else { return }
         if let t = lastCaptureEnd, Date().timeIntervalSince(t) < 0.4 { return }
-        NSApp.activate(ignoringOtherApps: true)
-        if let w = NSApp.windows.first(where: { !($0 is NSPanel) && $0.isVisible }) {
-            w.makeKeyAndOrderFront(nil)
-            beginCapture()
-        } else {
-            // Main window closed (menu-bar-only use): ask the scene to open it, then capture.
-            NotificationCenter.default.post(name: .kmctrlOpenMainWindow, object: nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                guard let self, self.state == .connected else { return }
-                NSApp.activate(ignoringOtherApps: true)
-                self.beginCapture()
-            }
+        guard let window = mainWindowProvider() else {
+            DebugLog.log("control host: re-grab ignored — main window not available", .warn); return
         }
-        DebugLog.log("control host: re-grab via \(HotkeyMonitor.label)")
+        // Bring the main window back (it stays alive when closed) and activate. Activation
+        // is asynchronous, so capture only once the app is actually active.
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        waitForActivation(attempts: 10) { [weak self] active in
+            guard let self, self.state == .connected else { return }
+            guard active else {
+                DebugLog.log("control host: re-grab aborted — app did not become active", .warn); return
+            }
+            // Put the cursor inside our window so mouse events are routed to KMctrl, like a
+            // click on the capture area would. AppKit → CG coordinates (flip on the primary).
+            let f = window.frame
+            let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+            CGWarpMouseCursorPosition(CGPoint(x: f.midX, y: primaryHeight - f.midY))
+            self.beginCapture()
+            DebugLog.log("control host: re-grab via \(HotkeyMonitor.label)")
+        }
+    }
+
+    private func waitForActivation(attempts: Int, _ done: @escaping (Bool) -> Void) {
+        if NSApp.isActive || attempts == 0 { done(NSApp.isActive); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.waitForActivation(attempts: attempts - 1, done)
+        }
     }
 
     private func enterCapture() {
