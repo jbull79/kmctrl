@@ -33,6 +33,22 @@ If it still won't open, your MDM enforces Gatekeeper — build locally in Xcode 
   - **Edge mode** — bump a screen edge to hand off. Needs Accessibility + Input Monitoring
     (admin-grantable), so it's for non-MDM Macs.
 
+## Features (0.8)
+
+- **Clipboard sync** — text and images copied on either Mac appear on the other during a
+  session (trusted Macs only; toggle per Mac).
+- **Layout-independent typing** — the controlled Mac types what *your* keyboard layout
+  produced, even if its own layout differs. ⌘/⌃ shortcuts stay keycode-based.
+- **Media keys** — volume, brightness, play/pause, next/previous are forwarded. (macOS also
+  applies volume/brightness locally on the controlling Mac; only an event tap could stop
+  that, and MDM blocks those.)
+- **Mouse speed** slider (0.25×–3×) on the controlling Mac.
+- **⌃⌥⌘K re-grab** — start controlling again from any app while a session is open. ⌃⌥⌘
+  alone still releases. Carbon hotkey: no permissions, works on MDM Macs.
+- **Wake screen** — the remote display is woken when you start controlling, or on demand.
+- **Update check** — once a day against GitHub releases (toggle in Settings → General).
+- **Swipe-safe capture** — a Magic Mouse / trackpad system swipe no longer drops control.
+
 ## Use
 
 Install KMctrl on **both** Macs.
@@ -45,6 +61,7 @@ Install KMctrl on **both** Macs.
 
 ```sh
 xcodebuild -scheme KMctrl -configuration Release build
+xcodebuild -scheme KMctrl test          # unit tests (KMctrlTests)
 ```
 
 Requires macOS 13+. The app is ad-hoc/self-signed (not notarized) — a downloaded copy is
@@ -56,5 +73,11 @@ across rebuilds (no Apple Developer account needed).
 
 ## Status
 
-Early standalone split (v0.1). The networking/crypto core is shared (vendored) from NetCatch
-and is covered by tests in that repo.
+0.8 — daily-usable window-mode KVM. The networking/crypto core is shared (vendored) from
+NetCatch and covered by tests there; KMctrl's own logic (control codec, key/media-key
+mapping, versioning, clipboard state) is covered by `KMctrlTests`. Design notes live in
+`docs/superpowers/specs`.
+
+**Protocol note:** the experimental binary control codec in 0.8 carries typed characters, so
+both Macs must run 0.8+ when that flag is on. The default JSON path interoperates with 0.7.x
+(new features are simply not sent to an older peer).
