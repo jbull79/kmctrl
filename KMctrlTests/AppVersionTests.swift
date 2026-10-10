@@ -45,4 +45,9 @@ final class AppVersionTests: XCTestCase {
         XCTAssertNil(UpdateChecker.evaluate(tag: "nightly", url: url))
         XCTAssertEqual(UpdateChecker.evaluate(tag: "v99.0", url: url)?.version, "99.0")
     }
+
+    func testUpdateErrorsAreExplained() {
+        XCTAssertEqual(UpdateCheckError.notFound.errorDescription, "No release found — the GitHub repo may be private.")
+        XCTAssertEqual(UpdateCheckError.httpStatus(503).errorDescription, "GitHub answered HTTP 503.")
+    }
 }

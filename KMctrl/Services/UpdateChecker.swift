@@ -1,5 +1,16 @@
 import Foundation
 
+enum UpdateCheckError: Error, LocalizedError, Equatable {
+    case notFound
+    case httpStatus(Int)
+    var errorDescription: String? {
+        switch self {
+        case .notFound: return "No release found — the GitHub repo may be private."
+        case .httpStatus(let s): return "GitHub answered HTTP \(s)."
+        }
+    }
+}
+
 /// Daily check of the latest GitHub release. No self-update: the app is unsigned, so the
 /// user downloads and clears quarantine as the README describes.
 @MainActor
@@ -57,7 +68,15 @@ final class UpdateChecker: ObservableObject {
             var req = URLRequest(url: Self.endpoint)
             req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 404 {
+                // Deterministic (private repo / no release yet): back off for this run so we
+                // don't hammer GitHub hourly (in-memory only — the next launch retries once),
+                // and the UI shows why.
+                lastChecked = Date()
+                throw UpdateCheckError.notFound
+            }
+            guard status == 200 else { throw UpdateCheckError.httpStatus(status) }
             let info = try JSONDecoder().decode(ReleaseInfo.self, from: data)
             guard let url = info.downloadURL else { throw URLError(.badURL) }
             available = Self.evaluate(tag: info.tag_name, url: url)

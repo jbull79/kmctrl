@@ -81,7 +81,9 @@ struct SettingsView: View {
                     } else if updates.checking {
                         ProgressView().controlSize(.small)
                     } else {
-                        Text(updates.lastChecked == nil ? "Not checked yet" : "Up to date").foregroundStyle(.secondary)
+                        Text(updates.lastError != nil ? "Unavailable"
+                             : updates.lastChecked == nil ? "Not checked yet" : "Up to date")
+                            .foregroundStyle(.secondary)
                     }
                     Button("Check now") { Task { await updates.checkNow() } }.disabled(updates.checking)
                 }
