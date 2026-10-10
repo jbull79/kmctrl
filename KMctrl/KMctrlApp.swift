@@ -77,6 +77,7 @@ struct KMctrlApp: App {
                 .environmentObject(model.settings)
                 .environmentObject(model.manager)
                 .environmentObject(model.manager.discovery)
+                .environmentObject(model.host)
         }
         .menuBarExtraStyle(.window)
 

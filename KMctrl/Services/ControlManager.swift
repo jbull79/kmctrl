@@ -169,6 +169,7 @@ final class ControlManager: ObservableObject {
                         continue
                     }
                     if event.kind == .hostStats { continue }
+                    if event.kind == .wakeDisplay { DisplayWake.wake(); continue }
                     injector.apply(event)
                 }
             } catch {

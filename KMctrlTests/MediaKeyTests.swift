@@ -34,4 +34,9 @@ final class MediaKeyTests: XCTestCase {
         XCTAssertEqual(ControlEventKind.mediaKey.wireByte, 10)
         XCTAssertEqual(ControlEventKind(wireByte: 10), .mediaKey)
     }
+
+    func testWakeDisplayWireByte() {
+        XCTAssertEqual(ControlEventKind.wakeDisplay.wireByte, 11)
+        XCTAssertEqual(ControlEventKind(wireByte: 11), .wakeDisplay)
+    }
 }

@@ -97,6 +97,11 @@ struct ContentView: View {
                 StatusDot(color: host.state == .capturing ? .green : .orange)
                 Text(hostStatusText).fontWeight(.medium)
                 Spacer()
+                if host.state != .connecting {
+                    Button("Wake screen") { host.wakeRemoteDisplay() }
+                        .disabled(host.peerVersion < 2)
+                        .help(host.peerVersion < 2 ? "The other Mac needs KMctrl 0.8 or later" : "Wake the other Mac's display")
+                }
                 Button("Disconnect") { host.disconnect() }
             }
             if let err = host.lastError { Text(err).font(.caption).foregroundStyle(.red) }

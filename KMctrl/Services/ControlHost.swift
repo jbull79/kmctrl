@@ -218,6 +218,13 @@ final class ControlHost: ObservableObject {
         leaveCapture(warpInsideEdge: edgeModeEnabled)
     }
 
+    /// Ask the controlled Mac to wake its display (v2 peers only). Sent automatically when
+    /// capture begins and on demand from the UI.
+    func wakeRemoteDisplay() {
+        guard state == .connected || state == .capturing, peerVersion >= 2 else { return }
+        sendOnQueue(ControlEvent(kind: .wakeDisplay))
+    }
+
     private var lastCaptureEnd: Date?
 
     /// Hotkey entry point: re-enter capture on an open session. Ignored for 400 ms after a
@@ -250,6 +257,7 @@ final class ControlHost: ObservableObject {
         state = .capturing
         startFlushTimer()
         hint.flash()                                // remind how to release
+        wakeRemoteDisplay()                         // in case the remote display is asleep
         DebugLog.log("control host: capture begin")
     }
 

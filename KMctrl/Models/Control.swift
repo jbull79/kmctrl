@@ -15,6 +15,7 @@ enum ControlEventKind: String, Codable {
     case hostStats    // host→client diagnostics (dx=moves/s sent, dy=timer ticks/s); not injected
     case ping         // host→client latency probe; client echoes dx (host timestamp) in ControlReturn.pong; not injected
     case mediaKey     // host→client media/aux key (keyCode = NX key type, button = 1 down / 0 up); protocol v2
+    case wakeDisplay  // host→client: wake a sleeping display (IOPM user activity); not injected; protocol v2
 }
 
 /// Which screen edge of the controller hands off to the other Mac.
@@ -110,7 +111,7 @@ extension ControlEventKind {
     static let wireOrder: [ControlEventKind] = [
         .mouseMove, .mouseDown, .mouseUp, .scroll,
         .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping,
-        .mediaKey
+        .mediaKey, .wakeDisplay
     ]
     var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
     init?(wireByte: UInt8) {
