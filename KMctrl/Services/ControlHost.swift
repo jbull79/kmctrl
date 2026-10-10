@@ -13,6 +13,8 @@ final class ControlHost: ObservableObject {
     @Published var state: State = .idle
     @Published var peerName: String?
     @Published var lastError: String?
+    /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
+    @Published private(set) var peerVersion = 1
     /// Session-minimum control round-trip time (ms), reported in the Diagnostics log.
     private var latencyMinRTT = Double.greatestFiniteMagnitude
 
@@ -108,7 +110,7 @@ final class ControlHost: ObservableObject {
             guard let self else { return }
             do {
                 let link = try await TransportConnector.shared.connect(to: peer, localName: localName)
-                try await link.sendSecureObject(SessionHello(kind: .control))
+                try await link.sendSecureObject(SessionHello(kind: .control, version: SessionHello.currentControlVersion))
                 // Wait for the peer to accept before we ever capture / hijack the cursor.
                 let ack = try await link.receiveSecureObject(ControlAck.self)
                 guard ack.accepted else {
@@ -118,6 +120,7 @@ final class ControlHost: ObservableObject {
                     DebugLog.log("control host: peer refused — \(self.lastError ?? "")", .warn)
                     return
                 }
+                self.peerVersion = ack.version
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
                 try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge, autoReturn: self.edgeModeEnabled))
@@ -126,7 +129,7 @@ final class ControlHost: ObservableObject {
                 self.state = .connected
                 if self.edgeModeEnabled { self.startEdgeMode() }
                 self.startReturnReader(link: link)
-                DebugLog.log("control host: connected to \(peer.name)")
+                DebugLog.log("control host: connected to \(peer.name) (protocol v\(ack.version))")
             } catch {
                 self.lastError = error.localizedDescription
                 self.state = .idle
@@ -140,7 +143,7 @@ final class ControlHost: ObservableObject {
         edge?.stop(); edge = nil
         link?.cancel(); link = nil
         linkBox.link = nil
-        state = .idle; peerName = nil
+        state = .idle; peerName = nil; peerVersion = 1
     }
 
     /// Send a discrete event (click/key/releaseAll) on the flush queue, flushing any

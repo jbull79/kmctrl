@@ -35,6 +35,19 @@ enum ScreenEdge: String, Codable, CaseIterable, Identifiable {
 struct ControlAck: Codable {
     var accepted: Bool
     var reason: String = ""
+    /// Control protocol version the controlled Mac speaks. Absent from 0.7.x peers → 1.
+    /// The host only sends v2 features (`chars`, `.mediaKey`, `.wakeDisplay`) when ≥ 2.
+    var version: Int = 1
+
+    init(accepted: Bool, reason: String = "", version: Int = 1) {
+        self.accepted = accepted; self.reason = reason; self.version = version
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        accepted = try c.decode(Bool.self, forKey: .accepted)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+    }
 }
 
 /// Sent host→client right after accept: tells the client which of ITS edges means

@@ -115,7 +115,8 @@ final class ControlManager: ObservableObject {
                     // Master switch off → refuse outright.
                     guard self.settings.controlEnabled else {
                         try await link.sendSecureObject(ControlAck(
-                            accepted: false, reason: "Control is turned off on \(self.settings.deviceName)"))
+                            accepted: false, reason: "Control is turned off on \(self.settings.deviceName)",
+                            version: SessionHello.currentControlVersion))
                         link.cancel(); return
                     }
                     // Trust-gate: a trusted peer is accepted silently; an unknown peer needs a
@@ -126,7 +127,8 @@ final class ControlManager: ObservableObject {
                         ? true
                         : await self.requestControlApproval(name: link.remoteName, fingerprint: fp)
                     try await link.sendSecureObject(ControlAck(
-                        accepted: accepted, reason: accepted ? "" : "\(self.settings.deviceName) declined control"))
+                        accepted: accepted, reason: accepted ? "" : "\(self.settings.deviceName) declined control",
+                        version: SessionHello.currentControlVersion))
                     guard accepted else {
                         DebugLog.log("incoming: control declined", .warn)
                         link.cancel(); return
