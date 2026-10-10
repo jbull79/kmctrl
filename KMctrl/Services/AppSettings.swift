@@ -27,6 +27,8 @@ final class AppSettings: ObservableObject {
     /// EXPERIMENTAL: mouse-move coalescing flush cadence in ms (controlling Mac). Lower =
     /// smoother but more packets/CPU. One of `flushIntervalChoices`.
     @Published var flushIntervalMs: Int { didSet { defaults.set(flushIntervalMs, forKey: Keys.flushInterval) } }
+    /// Multiplier applied to forwarded mouse deltas on the controlling Mac (1.0 = as-is).
+    @Published var mouseSensitivity: Double { didSet { defaults.set(mouseSensitivity, forKey: Keys.mouseSensitivity) } }
     /// Which transport methods the connector may use, by raw value.
     @Published var enabledTransports: Set<String> {
         didSet { defaults.set(Array(enabledTransports), forKey: Keys.transports) }
@@ -47,6 +49,7 @@ final class AppSettings: ObservableObject {
         static let keepAwake = "kmctrl.keepAwakeEnabled"
         static let binaryControl = "kmctrl.binaryControl"
         static let flushInterval = "kmctrl.flushIntervalMs"
+        static let mouseSensitivity = "kmctrl.mouseSensitivity"
     }
 
     /// Allowed flush cadences (ms) for the experimental interval knob, with the default
@@ -55,6 +58,12 @@ final class AppSettings: ObservableObject {
     static let defaultFlushInterval = 8
     static func clampedFlushInterval(_ value: Int) -> Int {
         flushIntervalChoices.contains(value) ? value : defaultFlushInterval
+    }
+
+    static let mouseSensitivityRange = 0.25...3.0
+    /// 0 (unset) → 1.0; otherwise clamped into `mouseSensitivityRange`.
+    static func clampedMouseSensitivity(_ v: Double) -> Double {
+        v == 0 ? 1.0 : min(max(v, mouseSensitivityRange.lowerBound), mouseSensitivityRange.upperBound)
     }
 
     init() {
@@ -70,6 +79,7 @@ final class AppSettings: ObservableObject {
         keepAwakeEnabled = defaults.bool(forKey: Keys.keepAwake)
         binaryControl = defaults.bool(forKey: Keys.binaryControl)
         flushIntervalMs = AppSettings.clampedFlushInterval(defaults.integer(forKey: Keys.flushInterval))
+        mouseSensitivity = AppSettings.clampedMouseSensitivity(defaults.double(forKey: Keys.mouseSensitivity))
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {
             enabledTransports = Set(stored)
         } else {

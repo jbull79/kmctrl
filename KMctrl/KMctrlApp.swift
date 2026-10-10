@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 /// Top-level app state.
 @MainActor
@@ -10,9 +11,11 @@ final class AppModel: ObservableObject {
     let manager: ControlManager      // controlled side (listen + inject)
     let host = ControlHost()         // controlling side (capture + send)
     let keepAwake = KeepAwake()      // local presence keep-alive
+    private var bag = Set<AnyCancellable>()
 
     private init() {
         manager = ControlManager(settings: settings)
+        settings.$mouseSensitivity.sink { [host] v in host.mouseSensitivity = v }.store(in: &bag)
     }
 
     func start() {

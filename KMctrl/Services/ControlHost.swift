@@ -40,6 +40,8 @@ final class ControlHost: ObservableObject {
     /// change takes effect on the next connection — reconnect to A/B them).
     var useBinaryControl = false             // binary vs JSON control-event codec
     var flushIntervalMs = AppSettings.defaultFlushInterval   // mouse-move coalescing cadence
+    /// Live multiplier on forwarded mouse deltas (mirrors AppSettings.mouseSensitivity).
+    var mouseSensitivity = 1.0
 
     // Mouse-move coalescing — accumulate deltas in a lock-guarded buffer, flushed on a
     // precise off-main timer so the cursor stream has a steady cadence (no Task.sleep /
@@ -322,7 +324,7 @@ final class ControlHost: ObservableObject {
         let flags = cgFlags(e.modifierFlags)
         switch e.type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-            return ControlEvent(kind: .mouseMove, dx: e.deltaX, dy: e.deltaY, flags: flags)
+            return ControlEvent(kind: .mouseMove, dx: e.deltaX * mouseSensitivity, dy: e.deltaY * mouseSensitivity, flags: flags)
         case .leftMouseDown:  return ControlEvent(kind: .mouseDown, button: 0, flags: flags)
         case .leftMouseUp:    return ControlEvent(kind: .mouseUp, button: 0, flags: flags)
         case .rightMouseDown: return ControlEvent(kind: .mouseDown, button: 1, flags: flags)

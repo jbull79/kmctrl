@@ -172,6 +172,20 @@ struct SettingsView: View {
             }
 
             Section {
+                HStack {
+                    Slider(value: $settings.mouseSensitivity, in: AppSettings.mouseSensitivityRange, step: 0.25)
+                    Text(String(format: "%.2g×", settings.mouseSensitivity))
+                        .monospacedDigit().frame(width: 44, alignment: .trailing)
+                    Button("Reset") { settings.mouseSensitivity = 1.0 }
+                        .disabled(settings.mouseSensitivity == 1.0)
+                }
+            } header: {
+                Text("Mouse speed")
+            } footer: {
+                Text("Scales how far the remote pointer moves for each movement of your mouse. Takes effect immediately.")
+            }
+
+            Section {
                 Toggle("Binary control protocol", isOn: $settings.binaryControl)
                 Picker("Mouse flush interval", selection: $settings.flushIntervalMs) {
                     ForEach(AppSettings.flushIntervalChoices, id: \.self) { ms in
