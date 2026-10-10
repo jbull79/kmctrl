@@ -12,6 +12,7 @@ final class AppModel: ObservableObject {
     let host = ControlHost()         // controlling side (capture + send)
     let keepAwake = KeepAwake()      // local presence keep-alive
     let hotkey: HotkeyMonitor        // ⌃⌥⌘K re-grab
+    let updates = UpdateChecker()    // daily GitHub release check
     private var bag = Set<AnyCancellable>()
 
     private init() {
@@ -19,6 +20,8 @@ final class AppModel: ObservableObject {
         let host = host
         self.manager = manager
         hotkey = HotkeyMonitor { host.regrab() }
+        let settings = settings
+        updates.isEnabled = { settings.updateCheckEnabled }
         settings.$mouseSensitivity.sink { v in host.mouseSensitivity = v }.store(in: &bag)
         // Hotkey is live only while there is a session to re-enter.
         settings.$regrabHotkeyEnabled.combineLatest(host.$state)
@@ -32,6 +35,7 @@ final class AppModel: ObservableObject {
         manager.startServices()
         applyActivationPolicy()
         if settings.keepAwakeEnabled { keepAwake.start() }
+        updates.start()
     }
 
     /// Dock icon visibility. The menu-bar item is controlled separately (settings.menuBarVisible).
@@ -59,6 +63,7 @@ struct KMctrlApp: App {
                 .environmentObject(model.manager)
                 .environmentObject(model.manager.discovery)
                 .environmentObject(model.host)
+                .environmentObject(model.updates)
                 .frame(width: 440)
                 .onAppear { model.start() }
                 .onReceive(NotificationCenter.default.publisher(for: .kmctrlOpenMainWindow)) { _ in
@@ -78,6 +83,7 @@ struct KMctrlApp: App {
                 .environmentObject(model.manager)
                 .environmentObject(model.manager.discovery)
                 .environmentObject(model.host)
+                .environmentObject(model.updates)
         }
         .menuBarExtraStyle(.window)
 
@@ -86,6 +92,7 @@ struct KMctrlApp: App {
                 .environmentObject(model)
                 .environmentObject(model.settings)
                 .environmentObject(model.manager)
+                .environmentObject(model.updates)
         }
     }
 }

@@ -8,6 +8,7 @@ struct MenuBarView: View {
     @EnvironmentObject private var manager: ControlManager
     @EnvironmentObject private var discovery: DiscoveryService
     @EnvironmentObject private var host: ControlHost
+    @EnvironmentObject private var updates: UpdateChecker
     @Environment(\.openWindow) private var openWindow
     // Live cross-window mirror of the accept-control switch (see ContentView).
     @AppStorage(AppSettings.Keys.control) private var acceptControl = false
@@ -62,6 +63,9 @@ struct MenuBarView: View {
 
             Divider()
 
+            if let a = updates.available {
+                Button("Update to \(a.version)…") { NSWorkspace.shared.open(a.url) }
+            }
             Button("Open KMctrl") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
             if #available(macOS 14, *) {
                 SettingsLink { Text("Settings…") }

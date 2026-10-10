@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var manager: ControlManager
+    @EnvironmentObject private var updates: UpdateChecker
 
     private enum Presence: String, CaseIterable, Identifiable {
         case both = "Dock + Menu bar", dock = "Dock only", menuBar = "Menu bar only"
@@ -69,6 +70,27 @@ struct SettingsView: View {
                 Text("Appearance")
             } footer: {
                 Text("Run from the Dock, the menu bar, or both.")
+            }
+            Section {
+                HStack {
+                    Text("KMctrl \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                    Spacer()
+                    if let a = updates.available {
+                        Button("Download \(a.version)") { NSWorkspace.shared.open(a.url) }
+                            .buttonStyle(.borderedProminent).controlSize(.small)
+                    } else if updates.checking {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(updates.lastChecked == nil ? "Not checked yet" : "Up to date").foregroundStyle(.secondary)
+                    }
+                    Button("Check now") { Task { await updates.checkNow() } }.disabled(updates.checking)
+                }
+                Toggle("Check for updates on GitHub daily", isOn: $settings.updateCheckEnabled)
+                if let e = updates.lastError { Text(e).font(.caption).foregroundStyle(.red) }
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text("Checks github.com/jbull79/kmctrl/releases. Downloads open in your browser; the app does not update itself.")
             }
             Section {
                 Toggle("Keep this Mac active (prevent Away)", isOn: $keepAwake)
