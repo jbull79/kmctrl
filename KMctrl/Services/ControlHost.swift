@@ -326,7 +326,11 @@ final class ControlHost: ObservableObject {
         case .otherMouseDown: return ControlEvent(kind: .mouseDown, button: 2, flags: flags)
         case .otherMouseUp:   return ControlEvent(kind: .mouseUp, button: 2, flags: flags)
         case .scrollWheel:    return ControlEvent(kind: .scroll, scrollX: e.scrollingDeltaX, scrollY: e.scrollingDeltaY, flags: flags)
-        case .keyDown:        return ControlEvent(kind: .keyDown, keyCode: Int(e.keyCode), flags: flags)
+        case .keyDown:
+            var ce = ControlEvent(kind: .keyDown, keyCode: Int(e.keyCode), flags: flags)
+            // v2 peers get the typed characters so typing is layout-independent.
+            if peerVersion >= 2 { ce.chars = KeyCharacters.override(for: e.characters, flags: flags) }
+            return ce
         case .keyUp:          return ControlEvent(kind: .keyUp, keyCode: Int(e.keyCode), flags: flags)
         case .flagsChanged:   return ControlEvent(kind: .flagsChanged, flags: flags)
         default: return nil   // gestures (.swipe etc.) are swallowed during capture, never forwarded

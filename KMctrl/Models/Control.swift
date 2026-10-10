@@ -77,6 +77,25 @@ struct ControlEvent: Codable {
     var scrollY: Double = 0
     var keyCode: Int = 0         // virtual keycode
     var flags: UInt64 = 0        // CGEventFlags raw (modifier state)
+    /// Typed characters for a `.keyDown` (layout-independent typing, protocol v2). nil =
+    /// keycode only. Omitted from JSON when nil so plain frames stay byte-identical to 0.7.x.
+    var chars: String? = nil
+
+    enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars }
+
+    // Custom encode so `chars` is omitted (not `null`) when nil; decode stays synthesized.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(dx, forKey: .dx)
+        try c.encode(dy, forKey: .dy)
+        try c.encode(button, forKey: .button)
+        try c.encode(scrollX, forKey: .scrollX)
+        try c.encode(scrollY, forKey: .scrollY)
+        try c.encode(keyCode, forKey: .keyCode)
+        try c.encode(flags, forKey: .flags)
+        try c.encodeIfPresent(chars, forKey: .chars)
+    }
 }
 
 // MARK: - Binary wire codec (feature-flagged fast path)
@@ -112,13 +131,15 @@ private func readBE<T: FixedWidthInteger>(_ bytes: [UInt8], _ offset: Int, _: T.
 
 extension ControlEvent {
     /// Fixed 44-byte layout (big-endian; Doubles as their IEEE-754 bit pattern):
-    /// kind[1] button[1] keyCode[2] flags[8] dx[8] dy[8] scrollX[8] scrollY[8].
+    /// kind[1] button[1] keyCode[2] flags[8] dx[8] dy[8] scrollX[8] scrollY[8],
+    /// followed by an optional trailer `charsLen[1] chars[charsLen]` (UTF-8,
+    /// ≤ `KeyCharacters.maxBytes`) when `chars` is set. Exactly 44 bytes = legacy frame.
     static let binarySize = 44
 
     /// Encode without JSON reflection or per-event heap churn — the whole point of the
     /// binary control flag. Paired with `init(binary:)`; round-trip is exact.
     func encodedBinary() -> Data {
-        var d = Data(capacity: ControlEvent.binarySize)
+        var d = Data(capacity: ControlEvent.binarySize + 1 + KeyCharacters.maxBytes)
         d.append(kind.wireByte)
         d.append(UInt8(truncatingIfNeeded: button))
         appendBE(&d, UInt16(truncatingIfNeeded: keyCode))
@@ -127,11 +148,17 @@ extension ControlEvent {
         appendBE(&d, dy.bitPattern)
         appendBE(&d, scrollX.bitPattern)
         appendBE(&d, scrollY.bitPattern)
+        if let chars {
+            let utf8 = Array(chars.utf8)
+            if !utf8.isEmpty, utf8.count <= KeyCharacters.maxBytes {
+                d.append(UInt8(utf8.count)); d.append(contentsOf: utf8)
+            }
+        }
         return d
     }
 
     init(binary data: Data) throws {
-        guard data.count == ControlEvent.binarySize else { throw ControlCodecError.malformed }
+        guard data.count >= ControlEvent.binarySize else { throw ControlCodecError.malformed }
         let b = [UInt8](data)
         guard let kind = ControlEventKind(wireByte: b[0]) else { throw ControlCodecError.malformed }
         self.init(kind: kind)
@@ -142,5 +169,13 @@ extension ControlEvent {
         dy      = Double(bitPattern: readBE(b, 20, UInt64.self))
         scrollX = Double(bitPattern: readBE(b, 28, UInt64.self))
         scrollY = Double(bitPattern: readBE(b, 36, UInt64.self))
+        if b.count > ControlEvent.binarySize {
+            let len = Int(b[ControlEvent.binarySize])
+            guard len > 0, len <= KeyCharacters.maxBytes,
+                  b.count == ControlEvent.binarySize + 1 + len,
+                  let s = String(bytes: b[(ControlEvent.binarySize + 1)...], encoding: .utf8)
+            else { throw ControlCodecError.malformed }
+            chars = s
+        }
     }
 }

@@ -80,7 +80,7 @@ final class ControlInjector: @unchecked Sendable {
             }
         case .keyDown:
             flags = CGEventFlags(rawValue: e.flags)
-            postKey(CGKeyCode(e.keyCode), down: true)
+            postKey(CGKeyCode(e.keyCode), down: true, chars: e.chars)
             heldKeys.insert(CGKeyCode(e.keyCode))
         case .keyUp:
             flags = CGEventFlags(rawValue: e.flags)
@@ -155,9 +155,15 @@ final class ControlInjector: @unchecked Sendable {
         event?.post(tap: .cghidEventTap)
     }
 
-    private func postKey(_ code: CGKeyCode, down: Bool) {
+    /// `chars` (key down only) overrides the characters the controlled Mac's own layout would
+    /// derive from `code`, so typing follows the controller's layout.
+    private func postKey(_ code: CGKeyCode, down: Bool, chars: String? = nil) {
         let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
         event?.flags = flags
+        if down, let chars {
+            var units = Array(chars.utf16)
+            event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+        }
         event?.post(tap: .cghidEventTap)
     }
 

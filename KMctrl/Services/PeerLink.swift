@@ -185,7 +185,7 @@ final class PeerLink: @unchecked Sendable {
     /// Always handles both JSON and binary, so the sender's flag needs no coordination.
     func receiveControlEvent() async throws -> ControlEvent {
         let plain = try await receiveSecure()
-        if plain.first == PeerLink.binaryControlTag, plain.count == ControlEvent.binarySize + 1 {
+        if plain.first == PeerLink.binaryControlTag, plain.count >= ControlEvent.binarySize + 1 {
             return try ControlEvent(binary: plain.dropFirst())
         }
         return try JSONDecoder().decode(ControlEvent.self, from: plain)   // legacy / flag-off JSON

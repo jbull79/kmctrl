@@ -44,4 +44,40 @@ final class ControlCodecTests: XCTestCase {
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(Set(obj.keys), ["kind", "dx", "dy", "button", "scrollX", "scrollY", "keyCode", "flags"])
     }
+
+    func testBinaryTrailerRoundTripsChars() throws {
+        var e = ControlEvent(kind: .keyDown, keyCode: 0); e.chars = "ñ"
+        let data = e.encodedBinary()
+        XCTAssertEqual(data.count, ControlEvent.binarySize + 1 + 2)   // ñ is 2 UTF-8 bytes
+        XCTAssertEqual(try ControlEvent(binary: data).chars, "ñ")
+    }
+
+    func testLegacy44ByteFrameDecodes() throws {
+        let data = ControlEvent(kind: .keyDown, keyCode: 5).encodedBinary()
+        XCTAssertEqual(data.count, ControlEvent.binarySize)
+        XCTAssertNil(try ControlEvent(binary: data).chars)
+    }
+
+    func testOversizeCharsDroppedInBinary() throws {
+        var e = ControlEvent(kind: .keyDown); e.chars = String(repeating: "x", count: 40)
+        let data = e.encodedBinary()
+        XCTAssertEqual(data.count, ControlEvent.binarySize)
+        XCTAssertNil(try ControlEvent(binary: data).chars)
+    }
+
+    func testTruncatedTrailerThrows() {
+        var d = ControlEvent(kind: .keyDown).encodedBinary()
+        d.append(5); d.append(contentsOf: [0x61, 0x62])   // claims 5 bytes, provides 2
+        XCTAssertThrowsError(try ControlEvent(binary: d))
+    }
+
+    func testJSONOmitsCharsWhenNil() throws {
+        let data = try JSONEncoder().encode(ControlEvent(kind: .keyDown))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("chars"))
+    }
+
+    func testJSONRoundTripsChars() throws {
+        var e = ControlEvent(kind: .keyDown); e.chars = "ß"
+        XCTAssertEqual(try JSONDecoder().decode(ControlEvent.self, from: JSONEncoder().encode(e)).chars, "ß")
+    }
 }
