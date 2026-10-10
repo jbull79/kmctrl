@@ -25,3 +25,6 @@ NetCatch-*.zip
 
 # Licensing private key — never commit
 scripts/.license-private.key
+
+# Superpowers scratch
+.superpowers/

@@ -52,8 +52,50 @@ final class ControlHost: ObservableObject {
     init() {
         NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            // Window mode needs focus; edge mode uses a global tap, so don't drop it.
-            Task { @MainActor in if self?.edgeModeEnabled == false { self?.endCapture() } }
+            Task { @MainActor in self?.handleResignActive() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.state == .capturing else { return }
+                DebugLog.log("control host: active Space changed during capture (system swipe gesture?)", .warn)
+            }
+        }
+    }
+
+    /// Window mode needs focus; edge mode uses a global tap, so it never drops on deactivate.
+    /// A Magic Mouse / trackpad *system* swipe can switch Space and briefly deactivate us —
+    /// only end capture if we are still inactive after a short grace period, so a gesture
+    /// flicker keeps control while a real ⌘-Tab away still releases it.
+    private func handleResignActive() {
+        guard state == .capturing, !edgeModeEnabled else { return }
+        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+        DebugLog.log("control host: resigned active during capture (front: \(front)) — grace check in 250 ms", .warn)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, self.state == .capturing else { return }
+            if NSApp.isActive {
+                DebugLog.log("control host: re-activated within grace — capture kept")
+            } else {
+                DebugLog.log("control host: still inactive after grace — releasing", .warn)
+                self.endCapture()
+            }
+        }
+    }
+
+    /// Pin our ordinary windows to every Space for the duration of capture so a system
+    /// swipe that switches Space does not leave the window (and our active status) behind.
+    private var savedCollectionBehavior: [(NSWindow, NSWindow.CollectionBehavior)] = []
+    private func pinWindowsToAllSpaces(_ pin: Bool) {
+        if pin {
+            savedCollectionBehavior = NSApp.windows
+                .filter { !($0 is NSPanel) && $0.isVisible }
+                .map { ($0, $0.collectionBehavior) }
+            for (w, _) in savedCollectionBehavior {
+                w.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
+            }
+        } else {
+            for (w, b) in savedCollectionBehavior { w.collectionBehavior = b }
+            savedCollectionBehavior = []
         }
     }
 
@@ -175,6 +217,7 @@ final class ControlHost: ObservableObject {
         guard state == .connected else { return }
         CGDisplayHideCursor(CGMainDisplayID())
         CGAssociateMouseAndMouseCursorPosition(0)   // decouple hardware mouse from cursor
+        if !edgeModeEnabled { pinWindowsToAllSpaces(true) }
         state = .capturing
         startFlushTimer()
         hint.flash()                                // remind how to release
@@ -184,6 +227,7 @@ final class ControlHost: ObservableObject {
     private func leaveCapture(warpInsideEdge: Bool) {
         state = .connected                          // set first — prevents reentrancy
         hint.hide()
+        if !edgeModeEnabled { pinWindowsToAllSpaces(false) }
         flushTimer?.cancel(); flushTimer = nil
         CGAssociateMouseAndMouseCursorPosition(1)   // always restore the cursor
         CGDisplayShowCursor(CGMainDisplayID())
@@ -243,7 +287,10 @@ final class ControlHost: ObservableObject {
             .keyDown, .keyUp, .flagsChanged,
             .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
             .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
-            .otherMouseDown, .otherMouseUp, .scrollWheel
+            .otherMouseDown, .otherMouseUp, .scrollWheel,
+            // Gestures are swallowed while capturing (never forwarded) so a horizontal
+            // swipe can't trigger in-app navigation or steal the capture.
+            .swipe, .gesture, .magnify, .rotate, .smartMagnify, .pressure
         ]
         monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             guard let self, self.state == .capturing else { return event }
@@ -279,7 +326,7 @@ final class ControlHost: ObservableObject {
         case .keyDown:        return ControlEvent(kind: .keyDown, keyCode: Int(e.keyCode), flags: flags)
         case .keyUp:          return ControlEvent(kind: .keyUp, keyCode: Int(e.keyCode), flags: flags)
         case .flagsChanged:   return ControlEvent(kind: .flagsChanged, flags: flags)
-        default: return nil
+        default: return nil   // gestures (.swipe etc.) are swallowed during capture, never forwarded
         }
     }
 
