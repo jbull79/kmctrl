@@ -101,7 +101,14 @@ final class ControlHost: ObservableObject {
                 .filter { !($0 is NSPanel) && $0.isVisible }
                 .map { ($0, $0.collectionBehavior) }
             for (w, _) in savedCollectionBehavior {
-                w.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
+                // Only the all-Spaces bit. `.fullScreenAuxiliary` conflicts with the
+                // `.fullScreenPrimary` SwiftUI windows carry and older AppKit raises on the
+                // combination (suspected 0.8.0 crash on capture). `.moveToActiveSpace` is
+                // mutually exclusive with `.canJoinAllSpaces`, so clear it first.
+                var b = w.collectionBehavior
+                b.remove(.moveToActiveSpace)
+                b.insert(.canJoinAllSpaces)
+                w.collectionBehavior = b
             }
         } else {
             for (w, b) in savedCollectionBehavior { w.collectionBehavior = b }
