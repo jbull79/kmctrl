@@ -111,6 +111,9 @@ final class POSIXByteStream: ByteStream, @unchecked Sendable {
         // (No-op / harmless on non-TCP sockets like the test socketpair.)
         var on: Int32 = 1
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, socklen_t(MemoryLayout<Int32>.size))
+        // A peer that closes mid-write must surface as a failed send (EPIPE), never as a
+        // SIGPIPE that silently kills the whole app with no crash report.
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
     }
 
     /// Mark this socket latency-critical (voice service class) so Wi-Fi power-save

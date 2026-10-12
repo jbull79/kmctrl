@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        signal(SIGPIPE, SIG_IGN)   // belt and braces for SO_NOSIGPIPE: never die on a closed peer
         manager.startServices()
         applyActivationPolicy()
         if settings.keepAwakeEnabled { keepAwake.start() }

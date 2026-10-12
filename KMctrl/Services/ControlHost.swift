@@ -25,6 +25,10 @@ final class ControlHost: ObservableObject {
     private var latencyMinRTT = Double.greatestFiniteMagnitude
 
     /// Monotonic clock in ms. `nonisolated` so the off-main flush timer can stamp pings.
+    /// Latency probes / host stats use event kinds that 0.5–0.7 peers don't know; an old
+    /// peer drops the whole session on the first one, so only v2 peers get them.
+    nonisolated static func sendsProbes(peerVersion: Int) -> Bool { peerVersion >= 2 }
+
     nonisolated static func nowMs() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000.0 }
 
     private func recordLatency(_ rtt: Double) {
@@ -315,6 +319,7 @@ final class ControlHost: ObservableObject {
         flushTimer?.cancel()
         let buf = moveBuffer; let box = linkBox
         let intervalMs = flushIntervalMs   // already validated by AppSettings
+        let probes = ControlHost.sendsProbes(peerVersion: peerVersion)
         let timer = DispatchSource.makeTimerSource(queue: flushQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(intervalMs), leeway: .nanoseconds(0))
         var sent = 0, ticks = 0
@@ -332,13 +337,13 @@ final class ControlHost: ObservableObject {
             }
             let now = DispatchTime.now()
             // Latency probe: ~5×/sec, host stamps its own clock; client bounces it back.
-            if now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
+            if probes, now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
                 _ = link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs()))
                 lastPing = now
             }
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {
                 DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(link.useBinaryControl ? "binary" : "json"))")
-                _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks)))
+                if probes { _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks))) }
                 sent = 0; ticks = 0; window = now
             }
         }
