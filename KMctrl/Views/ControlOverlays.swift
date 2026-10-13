@@ -39,16 +39,13 @@ private extension OverlayPanel {
         setFrameOrigin(NSPoint(x: x, y: y))
     }
 
-    /// Bottom-right of the screen (or the user's last dragged spot), clear of title bars.
-    func positionBottomRight(savedKey: String) {
+    /// Bottom-right of the screen, clear of title bars and the Dock.
+    func positionBottomRight() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         contentView?.layoutSubtreeIfNeeded()
         let size = contentView?.fittingSize ?? frame.size
         setContentSize(size)
-        let saved = (UserDefaults.standard.array(forKey: savedKey) as? [Double]).flatMap {
-            $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
-        }
-        setFrameOrigin(BadgePlacement.origin(size: size, visibleFrame: screen.visibleFrame, saved: saved))
+        setFrameOrigin(BadgePlacement.origin(size: size, visibleFrame: screen.visibleFrame, saved: nil))
     }
 }
 
@@ -56,13 +53,15 @@ private extension OverlayPanel {
 
 /// Shows "🔒 Controlled by <name>" with a Disconnect button while this Mac is being driven.
 /// Always-visible kill switch + clear signal that input is coming from elsewhere. Sits
-/// bottom-right by default, can be dragged anywhere (remembered), and can be hidden in
-/// Settings — the menu-bar item still shows who is controlling and offers Disconnect.
+/// bottom-right, clear of title bars, and can be hidden in Settings — the menu-bar item
+/// still shows who is controlling and offers Disconnect.
+///
+/// Deliberately NOT draggable: an injected click-and-move over a movable panel starts a
+/// window drag, and macOS then clamps the pointer so the window stays on screen — the
+/// remote pointer could no longer reach the bottom of the display.
 @MainActor
 final class ControlBadgeController {
-    static let positionKey = "kmctrl.badgeOrigin"
     private var panel: OverlayPanel?
-    private var moveObserver: Any?
 
     func show(controller name: String, onDisconnect: @escaping () -> Void) {
         hide()
@@ -71,20 +70,12 @@ final class ControlBadgeController {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
         let panel = OverlayPanel(content: host)
-        panel.isMovableByWindowBackground = true
-        panel.positionBottomRight(savedKey: Self.positionKey)
+        panel.positionBottomRight()
         panel.orderFrontRegardless()
-        moveObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak panel] _ in
-            guard let o = panel?.frame.origin else { return }
-            UserDefaults.standard.set([Double(o.x), Double(o.y)], forKey: ControlBadgeController.positionKey)
-        }
         self.panel = panel
     }
 
     func hide() {
-        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
-        moveObserver = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -105,7 +96,7 @@ private struct ControlBadgeView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Controlled by \(peerName)")
                     .font(.system(.callout, weight: .semibold))
-                Text("Drag to move · hide in Settings")
+                Text("Hide in Settings → Control")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             Button(role: .destructive, action: onDisconnect) {
