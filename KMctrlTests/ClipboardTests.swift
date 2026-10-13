@@ -132,4 +132,16 @@ final class ClipboardSyncBehaviourTests: XCTestCase {
         sync.receive(ClipboardPayload(text: "theirs", image: nil), from: "abc")
         XCTAssertEqual(pb.string(forType: .string), "mine")
     }
+
+    func testRepeatedDeactivateDoesNotExtendGrace() async {
+        let sync = makeSync(graceSeconds: 0.2)
+        sync.setActive(true, sessionFingerprint: "abc") { [peer] in peer }
+        sync.setActive(false, sessionFingerprint: "") { nil }
+        await settle(150)
+        sync.setActive(false, sessionFingerprint: "") { nil }   // must not restart the clock
+        await settle(100)                                      // 250 ms after the real end
+        copy("mine")
+        sync.receive(ClipboardPayload(text: "late", image: nil), from: "abc")
+        XCTAssertEqual(pb.string(forType: .string), "mine")
+    }
 }

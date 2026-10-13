@@ -42,8 +42,10 @@ final class ClipboardSync {
             acceptUntil = nil
             lastPushed = nil
         } else {
+            // Grace starts only on the transition from active; a repeated deactivate must
+            // not restart the clock, and a never-active instance accepts nothing.
+            if peerResolver != nil { acceptUntil = Date().addingTimeInterval(receiveGrace) }
             peerResolver = nil
-            acceptUntil = sessionFingerprint == nil ? nil : Date().addingTimeInterval(receiveGrace)
         }
     }
 
@@ -74,6 +76,7 @@ final class ClipboardSync {
         }
         if peerResolver == nil {   // session over: only within grace
             guard let until = acceptUntil, Date() < until else {
+                sessionFingerprint = nil; acceptUntil = nil   // grace over: forget the peer entirely
                 DebugLog.log("clipboard: ignored push after session grace", .warn); return
             }
         }
