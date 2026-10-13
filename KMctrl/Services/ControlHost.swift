@@ -159,6 +159,7 @@ final class ControlHost: ObservableObject {
     }
 
     func disconnect() {
+        if state != .idle { DebugLog.log("control host: disconnect (was \(state))") }
         endCapture()
         edge?.stop(); edge = nil
         link?.cancel(); link = nil
@@ -175,6 +176,7 @@ final class ControlHost: ObservableObject {
             guard let link = box.link else { return }
             if let move = buf.takeEvent() { _ = link.sendControlEventSync(move) }
             if !link.sendControlEventSync(event) {
+                DebugLog.log("control host: send of \(event.kind.rawValue) failed — disconnecting", .error)
                 Task { @MainActor in self?.disconnect() }
             }
         }
@@ -189,9 +191,11 @@ final class ControlHost: ObservableObject {
                     let rtt = ControlHost.nowMs() - sent                 // same host clock → no sync needed
                     await MainActor.run { self?.recordLatency(rtt) }
                 } else {
+                    DebugLog.log("control host: peer signalled return of control")
                     await MainActor.run { self?.endCapture() }           // real return-of-control signal
                 }
             }
+            DebugLog.log("control host: return reader ended (link closed)", .warn)
         }
     }
 
@@ -332,6 +336,7 @@ final class ControlHost: ObservableObject {
                 if link.sendControlEventSync(move) {
                     sent += 1
                 } else {
+                    DebugLog.log("control host: send of mouseMove failed — disconnecting", .error)
                     Task { @MainActor in self?.disconnect() }
                 }
             }
@@ -369,6 +374,7 @@ final class ControlHost: ObservableObject {
             if event.type == .flagsChanged {
                 let f = event.modifierFlags
                 if f.contains(.control), f.contains(.option), f.contains(.command) {
+                    DebugLog.log("control host: release chord pressed")
                     self.endCapture(); return nil
                 }
             }

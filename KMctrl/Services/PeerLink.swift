@@ -146,16 +146,27 @@ final class PeerLink: @unchecked Sendable {
     /// Synchronous encrypted send (POSIX transport only) for the low-latency control
     /// path. Returns false if not possible (e.g. NW transport) so the caller can fall back.
     func sendSecureObjectSync<T: Encodable>(_ value: T) -> Bool {
-        guard let data = try? JSONEncoder().encode(value) else { return false }
-        return sendSealedSync(data)
+        do {
+            return sendSealedSync(try JSONEncoder().encode(value))
+        } catch {
+            DebugLog.log("link: JSON encode failed for \(T.self) — \(error)", .error)
+            return false
+        }
     }
 
     /// Seal `payload` and write it as one frame on the sync path (POSIX transport only).
     /// The single place the sync-send tail (cipher + framed write) lives.
     private func sendSealedSync(_ payload: Data) -> Bool {
-        guard let key = sessionKey, let posix = stream as? POSIXByteStream,
-              let sealed = try? CryptoService.seal(payload, key: key) else { return false }
-        return posix.sendFrameSync(sealed)
+        guard let key = sessionKey else { DebugLog.log("link: sync send before handshake", .error); return false }
+        guard let posix = stream as? POSIXByteStream else {
+            DebugLog.log("link: sync send needs the POSIX transport (link is \(type(of: stream)))", .error); return false
+        }
+        guard let sealed = try? CryptoService.seal(payload, key: key) else {
+            DebugLog.log("link: seal failed", .error); return false
+        }
+        let ok = posix.sendFrameSync(sealed)
+        if !ok { DebugLog.log("link: socket write failed (errno \(errno): \(String(cString: strerror(errno))))", .error) }
+        return ok
     }
 
     func receiveSecureObject<T: Decodable>(_ type: T.Type) async throws -> T {
