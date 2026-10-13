@@ -18,6 +18,10 @@ final class ControlHost: ObservableObject {
     @Published private(set) var peerFingerprint: String?
     /// Supplies the main window for hotkey re-grab (set by AppModel; nil = not shown yet).
     var mainWindowProvider: () -> NSWindow? = { nil }
+    /// Called once a peer has accepted us, with its authenticated fingerprint and name, so
+    /// the app can trust it — the controlled Mac hands its clipboard back over a fresh
+    /// connection, which our receiver only accepts from trusted fingerprints.
+    var onPeerAccepted: (String, String) -> Void = { _, _ in }
     @Published var lastError: String?
     /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
     @Published private(set) var peerVersion = 1
@@ -139,6 +143,7 @@ final class ControlHost: ObservableObject {
                 }
                 self.peerVersion = ack.version
                 self.peerFingerprint = link.remoteFingerprint
+                self.onPeerAccepted(link.remoteFingerprint, link.remoteName)
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
                 try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge, autoReturn: self.edgeModeEnabled))
@@ -185,7 +190,17 @@ final class ControlHost: ObservableObject {
     /// control back to this Mac.
     private func startReturnReader(link: PeerLink) {
         Task { [weak self] in
-            while let r = try? await link.receiveSecureObject(ControlReturn.self) {
+            while true {
+                let r: ControlReturn
+                do {
+                    r = try await link.receiveSecureObject(ControlReturn.self)
+                } catch let e as DecodingError {
+                    DebugLog.log("control host: ignoring undecodable frame from peer — \(e)", .warn)
+                    continue                                              // link is fine, frame wasn't
+                } catch {
+                    DebugLog.log("control host: return reader ended — \(error.localizedDescription)", .warn)
+                    break
+                }
                 if let sent = r.pong {
                     let rtt = ControlHost.nowMs() - sent                 // same host clock → no sync needed
                     await MainActor.run { self?.recordLatency(rtt) }
@@ -194,7 +209,6 @@ final class ControlHost: ObservableObject {
                     await MainActor.run { self?.endCapture() }           // real return-of-control signal
                 }
             }
-            DebugLog.log("control host: return reader ended (link closed)", .warn)
             // The peer is gone: release capture and the cursor now, don't wait for the next
             // mouse move to discover the dead socket.
             await MainActor.run { if self?.state != .idle { self?.disconnect() } }
