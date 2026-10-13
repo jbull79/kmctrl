@@ -209,7 +209,7 @@ struct SettingsView: View {
             } header: {
                 Text("Re-grab hotkey")
             } footer: {
-                Text("Works while a session is connected, from any app. ⌃⌥⌘ alone still releases. No permissions needed.")
+                Text("Works while a session is connected, from any app. While controlling, \(HotkeyMonitor.label) also releases — even if a system dialog has taken the keyboard. ⌃⌥⌘ alone still releases. No permissions needed.")
             }
 
             Section {

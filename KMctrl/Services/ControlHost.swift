@@ -195,6 +195,9 @@ final class ControlHost: ObservableObject {
                 }
             }
             DebugLog.log("control host: return reader ended (link closed)", .warn)
+            // The peer is gone: release capture and the cursor now, don't wait for the next
+            // mouse move to discover the dead socket.
+            await MainActor.run { if self?.state != .idle { self?.disconnect() } }
         }
     }
 
@@ -252,6 +255,13 @@ final class ControlHost: ObservableObject {
     /// release, because ⌃⌥⌘K pressed *while* capturing releases on the modifiers first and
     /// the K would otherwise immediately re-capture.
     func regrab() {
+        // While capturing, the hotkey is a guaranteed release: Carbon hotkeys fire at system
+        // level even when a Keychain/security dialog has stolen keyboard focus and the
+        // ⌃⌥⌘ chord can no longer reach our event monitor.
+        if state == .capturing {
+            DebugLog.log("control host: release via \(HotkeyMonitor.label)")
+            endCapture(); return
+        }
         guard state == .connected else { return }
         if let t = lastCaptureEnd, Date().timeIntervalSince(t) < 0.4 { return }
         guard let window = mainWindowProvider() else {
@@ -342,7 +352,10 @@ final class ControlHost: ObservableObject {
             let now = DispatchTime.now()
             // Latency probe: ~5×/sec, host stamps its own clock; client bounces it back.
             if probes, now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
-                _ = link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs()))
+                if !link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs())) {
+                    DebugLog.log("control host: send of ping failed — disconnecting", .error)
+                    Task { @MainActor in self?.disconnect() }
+                }
                 lastPing = now
             }
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {

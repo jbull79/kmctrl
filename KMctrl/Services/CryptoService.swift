@@ -17,7 +17,24 @@ enum CryptoService {
     /// Keychain. The peer must prove possession of this key during the handshake
     /// (it signs its ephemeral key), so the fingerprint shown in the accept prompt
     /// actually authenticates the sender rather than echoing a replayable value.
+    /// Loaded once per launch and cached: a Keychain read can raise a password prompt on a
+    /// managed Mac, and it used to happen on every outgoing connection (each clipboard push)
+    /// — mid-capture, with the pointer hidden, that locked the user out.
+    private static let identityLock = NSLock()
+    nonisolated(unsafe) private static var cachedIdentity: Curve25519.Signing.PrivateKey?
+    /// Number of Keychain reads so far (test hook).
+    nonisolated(unsafe) private(set) static var keychainLoadCount = 0
+
     static func identitySigningKey() -> Curve25519.Signing.PrivateKey {
+        identityLock.lock(); defer { identityLock.unlock() }
+        if let cached = cachedIdentity { return cached }
+        let key = loadOrCreateIdentity()
+        cachedIdentity = key
+        return key
+    }
+
+    private static func loadOrCreateIdentity() -> Curve25519.Signing.PrivateKey {
+        keychainLoadCount += 1
         if let raw = keychainLoad(),
            let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw) {
             return key
