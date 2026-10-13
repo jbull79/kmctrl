@@ -29,36 +29,62 @@ private final class OverlayPanel: NSPanel {
 private extension OverlayPanel {
     /// Place the panel centred horizontally, a little below the top of the main screen.
     func positionTopCentre() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let v = screen.visibleFrame
+        contentView?.layoutSubtreeIfNeeded()
         let size = contentView?.fittingSize ?? frame.size
         setContentSize(size)
         let x = v.midX - size.width / 2
         let y = v.maxY - size.height - 12
         setFrameOrigin(NSPoint(x: x, y: y))
     }
+
+    /// Bottom-right of the screen (or the user's last dragged spot), clear of title bars.
+    func positionBottomRight(savedKey: String) {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        contentView?.layoutSubtreeIfNeeded()
+        let size = contentView?.fittingSize ?? frame.size
+        setContentSize(size)
+        let saved = (UserDefaults.standard.array(forKey: savedKey) as? [Double]).flatMap {
+            $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
+        }
+        setFrameOrigin(BadgePlacement.origin(size: size, visibleFrame: screen.visibleFrame, saved: saved))
+    }
 }
 
 // MARK: - Controlled-side badge
 
 /// Shows "🔒 Controlled by <name>" with a Disconnect button while this Mac is being driven.
-/// Always-visible kill switch + clear signal that input is coming from elsewhere.
+/// Always-visible kill switch + clear signal that input is coming from elsewhere. Sits
+/// bottom-right by default, can be dragged anywhere (remembered), and can be hidden in
+/// Settings — the menu-bar item still shows who is controlling and offers Disconnect.
 @MainActor
 final class ControlBadgeController {
+    static let positionKey = "kmctrl.badgeOrigin"
     private var panel: OverlayPanel?
+    private var moveObserver: Any?
 
     func show(controller name: String, onDisconnect: @escaping () -> Void) {
         hide()
+        guard UserDefaults.standard.object(forKey: AppSettings.Keys.showControlledBadge) as? Bool ?? true else { return }
         let view = ControlBadgeView(peerName: name, onDisconnect: onDisconnect)
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
         let panel = OverlayPanel(content: host)
-        panel.positionTopCentre()
+        panel.isMovableByWindowBackground = true
+        panel.positionBottomRight(savedKey: Self.positionKey)
         panel.orderFrontRegardless()
+        moveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak panel] _ in
+            guard let o = panel?.frame.origin else { return }
+            UserDefaults.standard.set([Double(o.x), Double(o.y)], forKey: ControlBadgeController.positionKey)
+        }
         self.panel = panel
     }
 
     func hide() {
+        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
+        moveObserver = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -79,7 +105,7 @@ private struct ControlBadgeView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Controlled by \(peerName)")
                     .font(.system(.callout, weight: .semibold))
-                Text("This Mac is being driven remotely")
+                Text("Drag to move · hide in Settings")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             Button(role: .destructive, action: onDisconnect) {

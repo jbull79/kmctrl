@@ -27,6 +27,8 @@ final class AppSettings: ObservableObject {
     /// EXPERIMENTAL: mouse-move coalescing flush cadence in ms (controlling Mac). Lower =
     /// smoother but more packets/CPU. One of `flushIntervalChoices`.
     @Published var flushIntervalMs: Int { didSet { defaults.set(flushIntervalMs, forKey: Keys.flushInterval) } }
+    /// Show the floating "Controlled by …" badge while another Mac drives this one.
+    @Published var showControlledBadge: Bool { didSet { defaults.set(showControlledBadge, forKey: Keys.showControlledBadge) } }
     /// Mirror text/image clipboard changes with the session peer (trusted Macs, during a session).
     @Published var clipboardSyncEnabled: Bool { didSet { defaults.set(clipboardSyncEnabled, forKey: Keys.clipboardSync) } }
     /// Daily GitHub releases check (Settings → General).
@@ -59,6 +61,7 @@ final class AppSettings: ObservableObject {
         static let regrabHotkey = "kmctrl.regrabHotkeyEnabled"
         static let updateCheck = "kmctrl.updateCheckEnabled"
         static let clipboardSync = "kmctrl.clipboardSyncEnabled"
+        static let showControlledBadge = "kmctrl.showControlledBadge"
     }
 
     /// Allowed flush cadences (ms) for the experimental interval knob, with the default
@@ -92,6 +95,7 @@ final class AppSettings: ObservableObject {
         regrabHotkeyEnabled = defaults.object(forKey: Keys.regrabHotkey) as? Bool ?? true
         updateCheckEnabled = defaults.object(forKey: Keys.updateCheck) as? Bool ?? true
         clipboardSyncEnabled = defaults.object(forKey: Keys.clipboardSync) as? Bool ?? true
+        showControlledBadge = defaults.object(forKey: Keys.showControlledBadge) as? Bool ?? true
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {
             enabledTransports = Set(stored)
         } else {

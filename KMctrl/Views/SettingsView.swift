@@ -150,10 +150,11 @@ struct SettingsView: View {
                         settings.controlEnabled = on
                         if !on { manager.disconnectControlled() }
                     }
+                Toggle("Show the floating \"Controlled by\" badge", isOn: $settings.showControlledBadge)
             } header: {
                 Text("This Mac")
             } footer: {
-                Text("When on, another trusted Mac can control this one (you confirm the first time).")
+                Text("When on, another trusted Mac can control this one (you confirm the first time). The badge sits bottom-right, can be dragged anywhere, and the menu bar always shows who is controlling with a Disconnect button.")
             }
 
             Section {
