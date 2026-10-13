@@ -51,6 +51,10 @@ final class AppModel: ObservableObject {
 
     func start() {
         signal(SIGPIPE, SIG_IGN)   // belt and braces for SO_NOSIGPIPE: never die on a closed peer
+        // Load the identity key now, off the main thread. A Keychain read blocks its caller
+        // until any password prompt is answered; doing it lazily on the main thread during a
+        // session froze the app with the pointer hidden (0.8.0–0.8.6). After this it is cached.
+        Task.detached(priority: .userInitiated) { _ = CryptoService.identitySigningKey() }
         manager.startServices()
         applyActivationPolicy()
         if settings.keepAwakeEnabled { keepAwake.start() }
