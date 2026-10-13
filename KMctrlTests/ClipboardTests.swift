@@ -31,57 +31,75 @@ final class ClipboardTests: XCTestCase {
 }
 
 /// Behavioural tests against a private pasteboard and an injected transport (no network).
+/// Clipboard follows the keyboard: pushed on hand-off, never polled.
 @MainActor
 final class ClipboardSyncBehaviourTests: XCTestCase {
     private var pb: NSPasteboard!
     private var sent: [(ClipboardPayload, String)] = []
     private var enabled = true
-    private var delay: UInt64 = 0
     private let peer = Peer(id: "p", name: "Other", endpoint: .hostPort(host: "127.0.0.1", port: 1))
 
     override func setUp() {
         pb = NSPasteboard(name: NSPasteboard.Name("kmctrl.tests.\(UUID().uuidString)"))
-        sent = []; enabled = true; delay = 0
+        sent = []; enabled = true
     }
     override func tearDown() { pb.releaseGlobally() }
 
-    private func makeSync() -> ClipboardSync {
-        ClipboardSync(pasteboard: pb, pollInterval: 0.02, isEnabled: { [unowned self] in self.enabled }) {
-            [unowned self] payload, _, fingerprint in
-            if self.delay > 0 { try await Task.sleep(nanoseconds: self.delay) }
-            self.sent.append((payload, fingerprint))
+    private func makeSync(graceSeconds: Double = 5) -> ClipboardSync {
+        ClipboardSync(pasteboard: pb, isEnabled: { [unowned self] in self.enabled }, receiveGrace: graceSeconds) {
+            [unowned self] payload, _, fingerprint in self.sent.append((payload, fingerprint))
         }
     }
 
     private func copy(_ text: String) { pb.clearContents(); pb.setString(text, forType: .string) }
-    private func settle(_ ms: UInt64 = 120) async { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+    private func settle(_ ms: UInt64 = 80) async { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
 
-    func testCopyDuringInFlightSendIsDeliveredAfterwards() async {
-        delay = 150_000_000                                   // first send takes 150 ms
+    func testHandoffPushesCurrentClipboardWithSessionFingerprint() async {
         let sync = makeSync()
-        sync.setActive(true, sessionFingerprint: "abc") { [peer] in peer }
-        copy("A"); await settle(60)
-        copy("B"); await settle(400)
-        XCTAssertEqual(sent.map { $0.0.text }, ["A", "B"])
+        sync.setActive(true, sessionFingerprint: "fp-1") { [peer] in peer }
+        copy("hello")
+        sync.pushNow(reason: "test"); await settle()
+        XCTAssertEqual(sent.map { $0.0.text }, ["hello"])
+        XCTAssertEqual(sent.map { $0.1 }, ["fp-1"])
     }
 
-    func testSendCarriesSessionFingerprint() async {
+    func testNothingIsSentWithoutAHandoff() async {
         let sync = makeSync()
-        sync.setActive(true, sessionFingerprint: "fp-123") { [peer] in peer }
-        copy("hello"); await settle()
-        XCTAssertEqual(sent.map { $0.1 }, ["fp-123"])
-    }
-
-    func testChangesWhileDisabledAreNotSentOnReenable() async {
-        let sync = makeSync()
-        sync.setActive(true, sessionFingerprint: "abc") { [peer] in peer }
-        enabled = false
-        copy("secret"); await settle()
-        enabled = true
-        await settle()
+        sync.setActive(true, sessionFingerprint: "fp-1") { [peer] in peer }
+        copy("a"); await settle(); copy("b"); await settle(300)
         XCTAssertTrue(sent.isEmpty)
-        copy("public"); await settle()
-        XCTAssertEqual(sent.map { $0.0.text }, ["public"])
+    }
+
+    func testUnchangedClipboardIsNotPushedTwice() async {
+        let sync = makeSync()
+        sync.setActive(true, sessionFingerprint: "fp-1") { [peer] in peer }
+        copy("same")
+        sync.pushNow(reason: "a"); await settle()
+        sync.pushNow(reason: "b"); await settle()
+        XCTAssertEqual(sent.count, 1)
+        copy("new")
+        sync.pushNow(reason: "c"); await settle()
+        XCTAssertEqual(sent.map { $0.0.text }, ["same", "new"])
+    }
+
+    func testReceivedContentIsNotPushedBack() async {
+        let sync = makeSync()
+        sync.setActive(true, sessionFingerprint: "fp-1") { [peer] in peer }
+        sync.receive(ClipboardPayload(text: "from-peer", image: nil), from: "fp-1")
+        sync.pushNow(reason: "release"); await settle()
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertEqual(pb.string(forType: .string), "from-peer")
+    }
+
+    func testDisabledMacNeitherPushesNorAccepts() async {
+        let sync = makeSync()
+        sync.setActive(true, sessionFingerprint: "fp-1") { [peer] in peer }
+        enabled = false
+        copy("mine")
+        sync.pushNow(reason: "x"); await settle()
+        XCTAssertTrue(sent.isEmpty)
+        sync.receive(ClipboardPayload(text: "theirs", image: nil), from: "fp-1")
+        XCTAssertEqual(pb.string(forType: .string), "mine")
     }
 
     func testReceiveIgnoredFromNonSessionPeer() {
@@ -94,18 +112,24 @@ final class ClipboardSyncBehaviourTests: XCTestCase {
         XCTAssertEqual(pb.string(forType: .string), "theirs")
     }
 
-    func testReceiveIgnoredWhenNoSession() {
+    func testReceiveAcceptedBrieflyAfterSessionEndsThenRejected() async {
+        // The controlled Mac pushes its clipboard back as the session ends; the controller
+        // may already have torn down the link, so accept from that peer for a short grace.
+        let sync = makeSync(graceSeconds: 0.2)
+        sync.setActive(true, sessionFingerprint: "abc") { [peer] in peer }
+        sync.setActive(false, sessionFingerprint: "") { nil }
+        copy("mine")
+        sync.receive(ClipboardPayload(text: "late", image: nil), from: "abc")
+        XCTAssertEqual(pb.string(forType: .string), "late")
+        await settle(300)
+        sync.receive(ClipboardPayload(text: "too-late", image: nil), from: "abc")
+        XCTAssertEqual(pb.string(forType: .string), "late")
+    }
+
+    func testReceiveIgnoredWhenNoSessionEver() {
         let sync = makeSync()
         copy("mine")
         sync.receive(ClipboardPayload(text: "theirs", image: nil), from: "abc")
         XCTAssertEqual(pb.string(forType: .string), "mine")
-    }
-
-    func testReceivedPayloadIsNotEchoedBack() async {
-        let sync = makeSync()
-        sync.setActive(true, sessionFingerprint: "abc") { [peer] in peer }
-        sync.receive(ClipboardPayload(text: "from-peer", image: nil), from: "abc")
-        await settle()
-        XCTAssertTrue(sent.isEmpty)
     }
 }

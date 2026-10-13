@@ -197,11 +197,11 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Sync clipboard with the other Mac during a session", isOn: $settings.clipboardSyncEnabled)
+                Toggle("Clipboard follows control", isOn: $settings.clipboardSyncEnabled)
             } header: {
                 Text("Clipboard")
             } footer: {
-                Text("Text and images copied on either Mac appear on the other while you are controlling or being controlled. Trusted Macs only; both Macs must have this on.")
+                Text("When you start controlling, this Mac's clipboard (text or image) is handed to the other Mac; when you release control, the other Mac's clipboard comes back. Nothing is polled in between. Trusted Macs only; both Macs must have this on.")
             }
 
             Section {

@@ -34,17 +34,21 @@ final class AppModel: ObservableObject {
             .sink { [hotkey] on in hotkey.setEnabled(on) }
             .store(in: &bag)
         // Clipboard sync follows the controlling session's lifetime.
+        var wasIdle = true
         host.$state.removeDuplicates()
             .sink { state in
                 switch state {
-                case .connected where host.currentPeer != nil:
+                case .connected where wasIdle && host.currentPeer != nil:
                     if let fp = host.peerFingerprint {
                         manager.clipboard.setActive(true, sessionFingerprint: fp) { host.currentPeer }
                     }
+                case .capturing:
+                    manager.clipboard.pushNow(reason: "control started")   // clipboard follows the keyboard
                 case .idle:
                     manager.clipboard.setActive(false, sessionFingerprint: "") { nil }
                 default: break
                 }
+                wasIdle = (state == .idle)
             }
             .store(in: &bag)
     }

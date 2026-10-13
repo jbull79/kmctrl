@@ -192,6 +192,10 @@ final class ControlManager: ObservableObject {
                     }
                     if event.kind == .hostStats { continue }
                     if event.kind == .wakeDisplay { DisplayWake.wake(); continue }
+                    if event.kind == .releaseAll {
+                        // Control is going back: hand our clipboard to the controller.
+                        Task { @MainActor [weak self] in self?.clipboard.pushNow(reason: "control released") }
+                    }
                     injector.apply(event)
                 }
             } catch {
@@ -199,6 +203,7 @@ final class ControlManager: ObservableObject {
                 DebugLog.log("control: session closed — \(error.localizedDescription)", .warn)
             }
         }.value
+        clipboard.pushNow(reason: "session ended")   // link dropped without a release: still hand it back
         clipboard.setActive(false, sessionFingerprint: "") { nil }
         controlActiveFrom = nil
         controlledLink = nil

@@ -10,7 +10,7 @@ other machine without admin rights.
 
 ## Download
 
-**[⬇ KMctrl 0.8.8 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.8.8/KMctrl-0.8.8.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
+**[⬇ KMctrl 0.8.9 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.8.9/KMctrl-0.8.9.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
 
 Unsigned, ad-hoc, **Apple Silicon only** (won't run on Intel). macOS quarantines
 downloaded unsigned apps — clear it (no admin needed on your own files):
@@ -35,8 +35,8 @@ If it still won't open, your MDM enforces Gatekeeper — build locally in Xcode 
 
 ## Features (0.8)
 
-- **Clipboard sync** — text and images copied on either Mac appear on the other during a
-  session (trusted Macs only; toggle per Mac).
+- **Clipboard follows control** — when you start controlling, your clipboard (text or image)
+  is handed to the other Mac; when you release, its clipboard comes back. No polling.
 - **Layout-independent typing** — the controlled Mac types what *your* keyboard layout
   produced, even if its own layout differs. ⌘/⌃ shortcuts stay keycode-based.
 - **Media keys** — volume, brightness, play/pause, next/previous are forwarded. (macOS also
