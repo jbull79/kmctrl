@@ -21,8 +21,8 @@ final class ControlHost: ObservableObject {
     @Published var lastError: String?
     /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
     @Published private(set) var peerVersion = 1
-    /// Session-minimum control round-trip time (ms), reported in the Diagnostics log.
-    private var latencyMinRTT = Double.greatestFiniteMagnitude
+    /// Round-trip samples aggregated to one Diagnostics line per second.
+    private var latency = LatencyStats()
 
     /// Monotonic clock in ms. `nonisolated` so the off-main flush timer can stamp pings.
     /// Latency probes / host stats use event kinds that 0.5–0.7 peers don't know; an old
@@ -32,9 +32,7 @@ final class ControlHost: ObservableObject {
     nonisolated static func nowMs() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000.0 }
 
     private func recordLatency(_ rtt: Double) {
-        latencyMinRTT = min(latencyMinRTT, rtt)
-        DebugLog.log(String(format: "control latency: RTT %.1f ms (one-way ~%.1f ms) · session min RTT %.1f ms",
-                            rtt, rtt / 2, latencyMinRTT))
+        if let line = latency.record(rtt: rtt, at: ControlHost.nowMs() / 1000) { DebugLog.log(line) }
     }
 
     private var link: PeerLink?
@@ -165,6 +163,7 @@ final class ControlHost: ObservableObject {
         link?.cancel(); link = nil
         linkBox.link = nil
         state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil; peerFingerprint = nil
+        latency = LatencyStats()
     }
 
     /// Send a discrete event (click/key/releaseAll) on the flush queue, flushing any
