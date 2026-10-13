@@ -51,7 +51,8 @@ final class ClipboardSync {
     /// Hand-off: push the current clipboard to the session peer, unless it is unchanged
     /// since the last push or is what the peer gave us.
     func pushNow(reason: String) {
-        guard isEnabled(), active, let fp = sessionFingerprint else { return }
+        guard isEnabled() else { DebugLog.log("clipboard: hand-off skipped — 'Clipboard follows control' is off here (\(reason))", .warn); return }
+        guard active, let fp = sessionFingerprint else { return }
         let count = pasteboard.changeCount
         guard count != lastOwnWrite, count != lastPushed else { return }
         guard let payload = Self.readLocal(pasteboard), !payload.isEmpty else { return }
