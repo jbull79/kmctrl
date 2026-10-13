@@ -19,7 +19,11 @@ final class ClipboardSync {
     private let transport: Transport
 
     private var state = ClipboardSyncState()
-    private var timer: Timer?
+    private var timer: DispatchSourceTimer?
+    /// Polling runs here, never on the main thread: reading the pasteboard change count is
+    /// an XPC round-trip that can take ~100 ms on a managed Mac with clipboard monitoring,
+    /// and the main thread is where window-mode capture receives mouse events.
+    private let pollQueue = DispatchQueue(label: "kmctrl.clipboard.poll", qos: .utility)
     private var peerResolver: (() -> Peer?)?
     private var sessionFingerprint: String?
     private var sending = false
@@ -37,7 +41,7 @@ final class ClipboardSync {
     /// Start/stop watching the local pasteboard for a session with the peer whose identity
     /// fingerprint is `sessionFingerprint`; `peerResolver` names the Mac to push to.
     func setActive(_ on: Bool, sessionFingerprint fp: String, peerResolver resolver: @escaping () -> Peer?) {
-        timer?.invalidate(); timer = nil
+        timer?.cancel(); timer = nil
         generation += 1
         sending = false; pendingResend = false
         guard on else { peerResolver = nil; sessionFingerprint = nil; return }
@@ -45,16 +49,21 @@ final class ClipboardSync {
         sessionFingerprint = fp
         state = ClipboardSyncState()
         _ = state.noteLocalChange(count: pasteboard.changeCount)   // baseline only
-        timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.poll() }
+        let t = DispatchSource.makeTimerSource(queue: pollQueue)
+        t.schedule(deadline: .now() + pollInterval, repeating: pollInterval, leeway: .milliseconds(50))
+        t.setEventHandler { [weak self, pasteboard] in
+            let count = pasteboard.changeCount            // off-main XPC read
+            Task { @MainActor in self?.poll(count: count) }
         }
+        t.resume()
+        timer = t
         DebugLog.log("clipboard: sync active")
     }
 
-    private func poll() {
+    private func poll(count: Int) {
         // Always consume the change count, even while disabled, so a copy made with sync
         // off is never pushed later when sync is turned back on.
-        let changed = state.noteLocalChange(count: pasteboard.changeCount)
+        let changed = state.noteLocalChange(count: count)
         guard changed, isEnabled() else { return }
         sendCurrent()
     }

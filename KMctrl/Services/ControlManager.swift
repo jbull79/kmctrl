@@ -180,8 +180,12 @@ final class ControlManager: ObservableObject {
                     injector.returnEdge = setup.hostEdge.opposite
                     injector.onReturn = { _ = link.sendSecureObjectSync(ControlReturn()) }
                 }
+                var stats = ReceiveStats()
                 while true {
                     let event = try await link.receiveControlEvent()   // auto-detects JSON/binary codec
+                    if let line = stats.record(isMove: event.kind == .mouseMove, at: ControlHost.nowMs() / 1000) {
+                        DebugLog.log(line)
+                    }
                     if event.kind == .ping {
                         _ = link.sendSecureObjectSync(ControlReturn(pong: event.dx))   // bounce timestamp back
                         continue
