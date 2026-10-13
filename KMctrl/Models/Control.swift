@@ -16,6 +16,7 @@ enum ControlEventKind: String, Codable {
     case ping         // host→client latency probe; client echoes dx (host timestamp) in ControlReturn.pong; not injected
     case mediaKey     // host→client media/aux key (keyCode = NX key type, button = 1 down / 0 up); protocol v2
     case wakeDisplay  // host→client: wake a sleeping display (IOPM user activity); not injected; protocol v2
+    case clipboard    // host→client clipboard hand-off (payload in `clipboard`); JSON only; protocol v2
 }
 
 /// Which screen edge of the controller hands off to the other Mac.
@@ -68,6 +69,14 @@ struct ControlSetup: Codable {
 struct ControlReturn: Codable {
     var ok: Bool = true
     var pong: Double? = nil   // echoed host timestamp (ms) for the latency probe; nil = real return
+    /// Controlled Mac's clipboard handed back when control is released (never a return).
+    var clipboard: ClipboardPayload? = nil
+
+    init(ok: Bool = true, pong: Double? = nil, clipboard: ClipboardPayload? = nil) {
+        self.ok = ok; self.pong = pong; self.clipboard = clipboard
+    }
+    /// A frame with a payload is not a return-of-control signal.
+    var isReturnSignal: Bool { pong == nil && clipboard == nil }
 }
 
 struct ControlEvent: Codable {
@@ -82,8 +91,13 @@ struct ControlEvent: Codable {
     /// Typed characters for a `.keyDown` (layout-independent typing, protocol v2). nil =
     /// keycode only. Omitted from JSON when nil so plain frames stay byte-identical to 0.7.x.
     var chars: String? = nil
+    /// Clipboard hand-off payload for `.clipboard` events. JSON only — such an event is never
+    /// binary-encoded (`isBinaryEncodable`), whatever the sender's codec flag.
+    var clipboard: ClipboardPayload? = nil
 
-    enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars }
+    var isBinaryEncodable: Bool { kind != .clipboard && clipboard == nil }
+
+    enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars, clipboard }
 
     // Custom encode so `chars` is omitted (not `null`) when nil; decode stays synthesized.
     func encode(to encoder: Encoder) throws {
@@ -97,6 +111,7 @@ struct ControlEvent: Codable {
         try c.encode(keyCode, forKey: .keyCode)
         try c.encode(flags, forKey: .flags)
         try c.encodeIfPresent(chars, forKey: .chars)
+        try c.encodeIfPresent(clipboard, forKey: .clipboard)
     }
 }
 
@@ -111,7 +126,7 @@ extension ControlEventKind {
     static let wireOrder: [ControlEventKind] = [
         .mouseMove, .mouseDown, .mouseUp, .scroll,
         .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping,
-        .mediaKey, .wakeDisplay
+        .mediaKey, .wakeDisplay, .clipboard
     ]
     var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
     init?(wireByte: UInt8) {

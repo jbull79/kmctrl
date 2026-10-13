@@ -1,25 +1,24 @@
 import AppKit
 
-/// Clipboard follows the keyboard. Nothing is polled: the controlling Mac pushes its
-/// clipboard when it starts controlling, and the controlled Mac pushes its clipboard back
-/// when control is released (chord, hotkey, Disconnect, or the link dropping). Each push is
-/// a short-lived `.clipboard` session — never on the control stream.
+/// Clipboard follows the keyboard. Nothing is polled: the controlling Mac hands its
+/// clipboard over when it starts controlling, and the controlled Mac hands its clipboard
+/// back when control is released. Both travel over the existing, authenticated control
+/// link (no extra connections — a managed Mac's firewall may refuse inbound ones).
 ///
-/// Both directions are pinned to the session peer's identity fingerprint: pushes verify the
-/// connected peer before sending, and inbound payloads are accepted only from that peer
-/// while the session is active (plus a short grace after it ends, for the release push).
+/// Inbound payloads are accepted only from the fingerprint of the session peer while the
+/// session is active (plus a short grace after it ends, for the release hand-back).
 @MainActor
 final class ClipboardSync {
-    /// Deliver `payload` to `peer`, aborting unless the authenticated remote fingerprint
-    /// equals the expected one. Injected so tests can run without a network.
-    typealias Transport = (ClipboardPayload, Peer, String) async throws -> Void
+    /// Deliver `payload` to the session peer whose fingerprint is given. Wired by the app to
+    /// the control link (either direction); injected so tests can run without a network.
+    typealias Transport = (ClipboardPayload, String) async throws -> Void
 
     private let pasteboard: NSPasteboard
     private let isEnabled: () -> Bool
     private let receiveGrace: TimeInterval
-    private let transport: Transport
+    var transport: Transport
 
-    private var peerResolver: (() -> Peer?)?
+    private var active = false
     private var sessionFingerprint: String?
     private var acceptUntil: Date?        // after the session ends, accept the peer's release push until here
     private var lastOwnWrite: Int?        // changeCount produced by writing a received payload
@@ -35,24 +34,24 @@ final class ClipboardSync {
 
     /// Bind to a session with the peer whose identity fingerprint is `fp`. Deactivating
     /// keeps accepting that peer's push for `receiveGrace` seconds.
-    func setActive(_ on: Bool, sessionFingerprint fp: String, peerResolver resolver: @escaping () -> Peer?) {
+    func setActive(_ on: Bool, sessionFingerprint fp: String) {
         if on {
-            peerResolver = resolver
+            active = true
             sessionFingerprint = fp
             acceptUntil = nil
             lastPushed = nil
         } else {
             // Grace starts only on the transition from active; a repeated deactivate must
             // not restart the clock, and a never-active instance accepts nothing.
-            if peerResolver != nil { acceptUntil = Date().addingTimeInterval(receiveGrace) }
-            peerResolver = nil
+            if active { acceptUntil = Date().addingTimeInterval(receiveGrace) }
+            active = false
         }
     }
 
     /// Hand-off: push the current clipboard to the session peer, unless it is unchanged
     /// since the last push or is what the peer gave us.
     func pushNow(reason: String) {
-        guard isEnabled(), let peer = peerResolver?(), let fp = sessionFingerprint else { return }
+        guard isEnabled(), active, let fp = sessionFingerprint else { return }
         let count = pasteboard.changeCount
         guard count != lastOwnWrite, count != lastPushed else { return }
         guard let payload = Self.readLocal(pasteboard), !payload.isEmpty else { return }
@@ -60,8 +59,8 @@ final class ClipboardSync {
         lastPushed = count
         Task { [transport] in
             do {
-                try await transport(payload, peer, fp)
-                DebugLog.log("clipboard: handed \(payload.text != nil ? "text" : "image") to \(peer.name) (\(reason))")
+                try await transport(payload, fp)
+                DebugLog.log("clipboard: handed \(payload.text != nil ? "text" : "image") over (\(reason))")
             } catch {
                 DebugLog.log("clipboard: hand-off failed — \(error.localizedDescription)", .warn)
             }
@@ -74,7 +73,7 @@ final class ClipboardSync {
         guard let fp = sessionFingerprint, fp == fingerprint else {
             DebugLog.log("clipboard: ignored push from a peer without an active session", .warn); return
         }
-        if peerResolver == nil {   // session over: only within grace
+        if !active {               // session over: only within grace
             guard let until = acceptUntil, Date() < until else {
                 sessionFingerprint = nil; acceptUntil = nil   // grace over: forget the peer entirely
                 DebugLog.log("clipboard: ignored push after session grace", .warn); return
@@ -97,18 +96,5 @@ final class ClipboardSync {
             return ClipboardPayload(text: nil, image: png)
         }
         return nil
-    }
-
-    /// The real transport: connect, verify the peer is who the session authenticated, push.
-    static func push(_ payload: ClipboardPayload, to peer: Peer, expectingFingerprint fp: String,
-                     localName: String, allowed: Set<TransportStrategy>) async throws {
-        let link = try await TransportConnector.shared.connect(to: peer, localName: localName, allowed: allowed)
-        defer { link.cancel() }
-        guard link.remoteFingerprint == fp else {
-            DebugLog.log("clipboard: '\(peer.name)' is not the session peer (fingerprint mismatch) — not sent", .error)
-            throw LinkError.authenticationFailed
-        }
-        try await link.sendSecureObject(SessionHello(kind: .clipboard))
-        try await link.sendSecureObject(payload)
     }
 }

@@ -186,7 +186,7 @@ final class PeerLink: @unchecked Sendable {
     /// binary path prepends the sentinel tag so the peer disambiguates by content.
     /// POSIX transport only (returns false otherwise).
     func sendControlEventSync(_ event: ControlEvent) -> Bool {
-        guard useBinaryControl else { return sendSecureObjectSync(event) }
+        guard useBinaryControl, event.isBinaryEncodable else { return sendSecureObjectSync(event) }
         var payload = Data([PeerLink.binaryControlTag])
         payload.append(event.encodedBinary())
         return sendSealedSync(payload)

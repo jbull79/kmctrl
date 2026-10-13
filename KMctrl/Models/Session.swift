@@ -30,10 +30,11 @@ struct SessionHello: Codable {
     var kind: SessionKind
     var version: Int = 1
 
-    /// Control-stream protocol version this build speaks. v2 (0.8) adds typed characters on
-    /// key downs (`ControlEvent.chars`), `.mediaKey` and `.wakeDisplay`. The controlled Mac
-    /// echoes its own version in `ControlAck.version`.
-    static let currentControlVersion = 2
+    /// Control-stream protocol version this build speaks. v2 (0.8.0) adds typed characters on
+    /// key downs (`ControlEvent.chars`), `.mediaKey` and `.wakeDisplay`; v3 (0.8.13) adds the
+    /// clipboard hand-off on the control link (`.clipboard` event, `ControlReturn.clipboard`).
+    /// The controlled Mac echoes its own version in `ControlAck.version`.
+    static let currentControlVersion = 3
 }
 
 /// Responder's reply to a `.sync` hello: whether it will sync with this peer. Sent before

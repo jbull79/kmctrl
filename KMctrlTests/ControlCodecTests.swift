@@ -80,4 +80,31 @@ final class ControlCodecTests: XCTestCase {
         var e = ControlEvent(kind: .keyDown); e.chars = "ß"
         XCTAssertEqual(try JSONDecoder().decode(ControlEvent.self, from: JSONEncoder().encode(e)).chars, "ß")
     }
+
+    func testClipboardEventKindWireByte() {
+        XCTAssertEqual(ControlEventKind.clipboard.wireByte, 12)
+    }
+
+    func testClipboardPayloadRoundTripsInJSONAndIsOmittedWhenNil() throws {
+        var e = ControlEvent(kind: .clipboard)
+        e.clipboard = ClipboardPayload(text: "hello", image: Data([1, 2]))
+        let back = try JSONDecoder().decode(ControlEvent.self, from: JSONEncoder().encode(e))
+        XCTAssertEqual(back.clipboard?.text, "hello"); XCTAssertEqual(back.clipboard?.image, Data([1, 2]))
+        let plain = try JSONEncoder().encode(ControlEvent(kind: .mouseMove))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("clipboard"))
+    }
+
+    func testClipboardEventNeverUsesBinaryCodec() {
+        var e = ControlEvent(kind: .clipboard); e.clipboard = ClipboardPayload(text: "x", image: nil)
+        XCTAssertFalse(e.isBinaryEncodable)
+        XCTAssertTrue(ControlEvent(kind: .mouseMove).isBinaryEncodable)
+    }
+
+    func testControlReturnCarriesClipboard() throws {
+        let r = ControlReturn(clipboard: ClipboardPayload(text: "back", image: nil))
+        let back = try JSONDecoder().decode(ControlReturn.self, from: JSONEncoder().encode(r))
+        XCTAssertEqual(back.clipboard?.text, "back"); XCTAssertNil(back.pong); XCTAssertTrue(back.ok)
+        let legacy = try JSONDecoder().decode(ControlReturn.self, from: Data(#"{"ok":true}"#.utf8))
+        XCTAssertNil(legacy.clipboard)
+    }
 }

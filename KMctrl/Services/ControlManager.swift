@@ -33,8 +33,9 @@ final class ControlManager: ObservableObject {
     /// A first-time request from an untrusted peer to control this Mac.
     @Published var pendingControlRequest: ControlApprovalRequest?
 
-    /// The link of the active inbound control session, so this Mac can end it.
-    private var controlledLink: PeerLink?
+    /// The link of the active inbound control session, so this Mac can end it (and hand
+    /// its clipboard back over it).
+    private(set) var controlledLink: PeerLink?
     /// On-screen "being controlled" badge (+ kill switch) shown while a remote drives us.
     private let badge = ControlBadgeController()
 
@@ -50,10 +51,8 @@ final class ControlManager: ObservableObject {
 
     init(settings: AppSettings) {
         self.settings = settings
-        clipboard = ClipboardSync(isEnabled: { settings.clipboardSyncEnabled }) { payload, peer, fp in
-            try await ClipboardSync.push(payload, to: peer, expectingFingerprint: fp,
-                                         localName: settings.deviceName, allowed: settings.enabledTransportStrategies)
-        }
+        // Transport is wired by AppModel (control link, either direction).
+        clipboard = ClipboardSync(isEnabled: { settings.clipboardSyncEnabled }) { _, _ in throw LinkError.notReady }
         receiver.onIncoming = { [weak self] link in self?.handleIncoming(link) }
     }
 
@@ -140,16 +139,7 @@ final class ControlManager: ObservableObject {
                     }
                     if !self.trust.isTrusted(fp) { self.trust.trust(fp, name: link.remoteName) }
                     link.setLowLatency()
-                    await self.runControlReceive(link: link)
-                case .clipboard:
-                    // No store-trust needed (and none granted): ClipboardSync accepts a push only
-                    // from the fingerprint of the peer in the current control session — either
-                    // the Mac controlling us (trusted) or the Mac we chose to control. Being
-                    // controlled by a peer still requires the explicit trust prompt.
-                    guard self.settings.clipboardSyncEnabled else { link.cancel(); return }
-                    let payload = try await link.receiveSecureObject(ClipboardPayload.self)
-                    link.cancel()
-                    self.clipboard.receive(payload, from: link.remoteFingerprint)
+                    await self.runControlReceive(link: link, hostVersion: hello.version)
                 default:
                     link.cancel()
                 }
@@ -160,16 +150,12 @@ final class ControlManager: ObservableObject {
         }
     }
 
-    private func runControlReceive(link: PeerLink) async {
+    private func runControlReceive(link: PeerLink, hostVersion: Int) async {
         let name = link.remoteName
         controlActiveFrom = name
         controlledLink = link
         badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
-        // Push our clipboard back to the controller: resolved by name from discovery, but the
-        // push verifies the connected Mac's fingerprint against this session's before sending.
-        clipboard.setActive(true, sessionFingerprint: link.remoteFingerprint) { [weak self] in
-            self?.discovery.peers.first { $0.name == name }
-        }
+        clipboard.setActive(true, sessionFingerprint: link.remoteFingerprint)
         DebugLog.log("control: session started from \(name)")
         await Task.detached(priority: .userInitiated) {
             let injector = ControlInjector()
@@ -193,8 +179,15 @@ final class ControlManager: ObservableObject {
                     }
                     if event.kind == .hostStats { continue }
                     if event.kind == .wakeDisplay { DisplayWake.wake(); continue }
-                    if event.kind == .releaseAll {
-                        // Control is going back: hand our clipboard to the controller.
+                    if event.kind == .clipboard {
+                        if let p = event.clipboard {
+                            Task { @MainActor [weak self] in self?.clipboard.receive(p, from: link.remoteFingerprint) }
+                        }
+                        continue
+                    }
+                    if event.kind == .releaseAll, hostVersion >= 3 {
+                        // Control is going back: hand our clipboard to the controller over this link
+                        // (v3 hosts only — older ones would read it as a return-of-control signal).
                         Task { @MainActor [weak self] in self?.clipboard.pushNow(reason: "control released") }
                     }
                     injector.apply(event)
@@ -204,8 +197,7 @@ final class ControlManager: ObservableObject {
                 DebugLog.log("control: session closed — \(error.localizedDescription)", .warn)
             }
         }.value
-        clipboard.pushNow(reason: "session ended")   // link dropped without a release: still hand it back
-        clipboard.setActive(false, sessionFingerprint: "") { nil }
+        clipboard.setActive(false, sessionFingerprint: "")
         controlActiveFrom = nil
         controlledLink = nil
         badge.hide()

@@ -18,6 +18,17 @@ final class ControlHost: ObservableObject {
     @Published private(set) var peerFingerprint: String?
     /// Supplies the main window for hotkey re-grab (set by AppModel; nil = not shown yet).
     var mainWindowProvider: () -> NSWindow? = { nil }
+    /// The controlled Mac handed its clipboard back (over the control link, on release).
+    var onClipboardReceived: (ClipboardPayload, String) -> Void = { _, _ in }
+
+    /// Hand our clipboard to the controlled Mac over the control link (outbound only — no
+    /// inbound connection to this Mac is ever needed). v2 peers only.
+    func sendClipboard(_ payload: ClipboardPayload) throws {
+        guard state == .connected || state == .capturing, link != nil else { throw LinkError.closed }
+        guard peerVersion >= 3 else { throw LinkError.rejected }   // older peers can't decode .clipboard
+        var e = ControlEvent(kind: .clipboard); e.clipboard = payload
+        sendOnQueue(e)
+    }
     @Published var lastError: String?
     /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
     @Published private(set) var peerVersion = 1
@@ -158,12 +169,21 @@ final class ControlHost: ObservableObject {
 
     func disconnect() {
         if state != .idle { DebugLog.log("control host: disconnect (was \(state))") }
+        let wasCapturing = state == .capturing
         endCapture()
         edge?.stop(); edge = nil
-        link?.cancel(); link = nil
+        let old = link
+        link = nil
         linkBox.link = nil
         state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil; peerFingerprint = nil
         latency = LatencyStats()
+        if wasCapturing, let old {
+            // Let the queued releaseAll go out and give the peer a moment to hand its
+            // clipboard back over the same link before we tear it down.
+            flushQueue.async { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { old.cancel() } }
+        } else {
+            old?.cancel()
+        }
     }
 
     /// Send a discrete event (click/key/releaseAll) on the flush queue, flushing any
@@ -199,6 +219,11 @@ final class ControlHost: ObservableObject {
                 if let sent = r.pong {
                     let rtt = ControlHost.nowMs() - sent                 // same host clock → no sync needed
                     await MainActor.run { self?.recordLatency(rtt) }
+                } else if let payload = r.clipboard {
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.onClipboardReceived(payload, link.remoteFingerprint)
+                    }
                 } else {
                     DebugLog.log("control host: peer signalled return of control")
                     await MainActor.run { self?.endCapture() }           // real return-of-control signal

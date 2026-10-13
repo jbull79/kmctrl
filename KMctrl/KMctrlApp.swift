@@ -34,6 +34,16 @@ final class AppModel: ObservableObject {
             .sink { [hotkey] on in hotkey.setEnabled(on) }
             .store(in: &bag)
         // Clipboard sync follows the controlling session's lifetime.
+        // Clipboard travels over whichever control link this Mac is on: as the controlled
+        // Mac, a ControlReturn back to the controller; as the controller, a .clipboard event.
+        manager.clipboard.transport = { payload, _ in
+            if let link = manager.controlledLink {
+                guard link.sendSecureObjectSync(ControlReturn(clipboard: payload)) else { throw LinkError.closed }
+            } else {
+                try host.sendClipboard(payload)
+            }
+        }
+        host.onClipboardReceived = { payload, fp in manager.clipboard.receive(payload, from: fp) }
         var previous: ControlHost.State = .idle
         host.$state.removeDuplicates()
             .sink { state in
@@ -41,12 +51,12 @@ final class AppModel: ObservableObject {
                 switch ClipboardSessionPolicy.action(from: previous, to: state) {
                 case .activate:
                     if let fp = host.peerFingerprint {
-                        manager.clipboard.setActive(true, sessionFingerprint: fp) { host.currentPeer }
+                        manager.clipboard.setActive(true, sessionFingerprint: fp)
                     }
                 case .push:
                     manager.clipboard.pushNow(reason: "control started")   // clipboard follows the keyboard
                 case .deactivate:
-                    manager.clipboard.setActive(false, sessionFingerprint: "") { nil }
+                    manager.clipboard.setActive(false, sessionFingerprint: "")
                 case .none: break
                 }
             }

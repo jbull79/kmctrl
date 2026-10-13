@@ -11,6 +11,6 @@ final class ProtocolVersionTests: XCTestCase {
     func testAckCarriesCurrentVersion() throws {
         let ack = ControlAck(accepted: true, version: SessionHello.currentControlVersion)
         let back = try JSONDecoder().decode(ControlAck.self, from: JSONEncoder().encode(ack))
-        XCTAssertEqual(back.version, 2)
+        XCTAssertEqual(back.version, 3)
     }
 }

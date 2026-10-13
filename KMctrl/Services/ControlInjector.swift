@@ -96,7 +96,7 @@ final class ControlInjector: @unchecked Sendable {
             releaseAll()
         case .mediaKey:
             postMediaKey(MediaKey(key: e.keyCode, isDown: e.button == 1, isRepeat: false))
-        case .hostStats, .ping, .wakeDisplay:
+        case .hostStats, .ping, .wakeDisplay, .clipboard:
             break   // control-plane only; never injected (client handles/echoes before apply)
         }
     }
