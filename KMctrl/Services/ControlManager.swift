@@ -142,10 +142,11 @@ final class ControlManager: ObservableObject {
                     link.setLowLatency()
                     await self.runControlReceive(link: link)
                 case .clipboard:
-                    // Trusted peers only, and only when this Mac opted in. Otherwise drop silently.
-                    guard self.settings.clipboardSyncEnabled, self.trust.isTrusted(link.remoteFingerprint) else {
-                        link.cancel(); return
-                    }
+                    // No store-trust needed (and none granted): ClipboardSync accepts a push only
+                    // from the fingerprint of the peer in the current control session — either
+                    // the Mac controlling us (trusted) or the Mac we chose to control. Being
+                    // controlled by a peer still requires the explicit trust prompt.
+                    guard self.settings.clipboardSyncEnabled else { link.cancel(); return }
                     let payload = try await link.receiveSecureObject(ClipboardPayload.self)
                     link.cancel()
                     self.clipboard.receive(payload, from: link.remoteFingerprint)

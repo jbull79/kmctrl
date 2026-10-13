@@ -24,12 +24,6 @@ final class AppModel: ObservableObject {
         self.manager = manager
         hotkey = HotkeyMonitor { host.regrab() }
         host.mainWindowProvider = { [weak self] in self?.mainWindow }
-        host.onPeerAccepted = { fp, name in
-            if !manager.trust.isTrusted(fp) {
-                manager.trust.trust(fp, name: name)
-                DebugLog.log("trust: now trusting \(name) (we chose to control it)")
-            }
-        }
         let settings = settings
         updates.isEnabled = { settings.updateCheckEnabled }
         settings.$mouseSensitivity.sink { v in host.mouseSensitivity = v }.store(in: &bag)

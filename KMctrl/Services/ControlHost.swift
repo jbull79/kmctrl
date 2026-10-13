@@ -18,10 +18,6 @@ final class ControlHost: ObservableObject {
     @Published private(set) var peerFingerprint: String?
     /// Supplies the main window for hotkey re-grab (set by AppModel; nil = not shown yet).
     var mainWindowProvider: () -> NSWindow? = { nil }
-    /// Called once a peer has accepted us, with its authenticated fingerprint and name, so
-    /// the app can trust it — the controlled Mac hands its clipboard back over a fresh
-    /// connection, which our receiver only accepts from trusted fingerprints.
-    var onPeerAccepted: (String, String) -> Void = { _, _ in }
     @Published var lastError: String?
     /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
     @Published private(set) var peerVersion = 1
@@ -143,7 +139,6 @@ final class ControlHost: ObservableObject {
                 }
                 self.peerVersion = ack.version
                 self.peerFingerprint = link.remoteFingerprint
-                self.onPeerAccepted(link.remoteFingerprint, link.remoteName)
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
                 try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge, autoReturn: self.edgeModeEnabled))
