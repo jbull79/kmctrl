@@ -30,10 +30,10 @@ final class ControlInjector: @unchecked Sendable {
     // event to an Int floors small swipes to 0 (dead/notchy scroll). Carry the remainder so
     // fractional motion accumulates into whole pixels instead of being lost.
     private var scrollRemX = 0.0, scrollRemY = 0.0
-    // Fraction of the remaining buffered movement applied per 120 Hz tick. Lower = motion
-    // is spread across more ticks → fills the ~100 ms Wi-Fi delivery gaps with continuous
-    // glide instead of a quick burst then freeze. Trades a little latency for smoothness.
-    private let drainFactor = 0.25
+    // Fraction of the remaining buffered movement applied per tick, learned from how the
+    // motion arrives (steady vs. bursty). See PaceEstimator.
+    private var pace = PaceEstimator()
+    private let tickSeconds = 0.008
 
     init() {
         bounds = EdgeCapture.desktopBounds()   // span all displays on the controlled Mac
@@ -60,7 +60,10 @@ final class ControlInjector: @unchecked Sendable {
     func apply(_ e: ControlEvent) {
         switch e.kind {
         case .mouseMove:
-            lock.lock(); pendDX += e.dx; pendDY += e.dy; lock.unlock()
+            lock.lock()
+            pendDX += e.dx; pendDY += e.dy
+            pace.noteArrival(at: ControlHost.nowMs() / 1000)
+            lock.unlock()
         case .mouseDown:
             flushPendingMove()
             if e.button == 0 { mouseDown = true }
@@ -115,7 +118,8 @@ final class ControlInjector: @unchecked Sendable {
         if abs(pendDX) < 2 && abs(pendDY) < 2 {       // finish off the remainder
             stepX = pendDX; stepY = pendDY
         } else {
-            stepX = pendDX * drainFactor; stepY = pendDY * drainFactor
+            let f = pace.drainFraction(tick: tickSeconds)
+            stepX = pendDX * f; stepY = pendDY * f
         }
         pendDX -= stepX; pendDY -= stepY
         lock.unlock()
