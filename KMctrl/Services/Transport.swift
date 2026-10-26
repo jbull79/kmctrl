@@ -114,6 +114,14 @@ final class POSIXByteStream: ByteStream, @unchecked Sendable {
         // A peer that closes mid-write must surface as a failed send (EPIPE), never as a
         // SIGPIPE that silently kills the whole app with no crash report.
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        // Notice a dead link within ~20 s (10 s idle + 3 probes 3 s apart). Without this a
+        // session whose peer — or whose own address, e.g. Wi-Fi switched off while on
+        // Ethernet — vanished waits on recv forever, leaking its session and injector.
+        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var idle: Int32 = 10, interval: Int32 = 3, probes: Int32 = 3
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probes, socklen_t(MemoryLayout<Int32>.size))
     }
 
     /// Mark this socket latency-critical (voice service class) so Wi-Fi power-save

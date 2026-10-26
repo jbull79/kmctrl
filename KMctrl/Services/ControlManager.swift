@@ -197,10 +197,14 @@ final class ControlManager: ObservableObject {
                 DebugLog.log("control: session closed — \(error.localizedDescription)", .warn)
             }
         }.value
-        clipboard.setActive(false, sessionFingerprint: "")
-        controlActiveFrom = nil
-        controlledLink = nil
-        badge.hide()
+        // An old session can end late (keepalive reaping a link whose network went away)
+        // after a newer one took over — only clear the shared state if it is still ours.
+        if controlledLink === link {
+            clipboard.setActive(false, sessionFingerprint: "")
+            controlActiveFrom = nil
+            controlledLink = nil
+            badge.hide()
+        }
         link.cancel()
         DebugLog.log("control: session ended (\(name))")
     }
