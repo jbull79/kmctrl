@@ -10,6 +10,11 @@ import CoreGraphics
 final class ControlHost: ObservableObject {
     enum State: Equatable { case idle, connecting, connected, capturing }
 
+    /// Control frames are written synchronously to a raw socket (`sendControlEventSync`), so a
+    /// control link must be POSIX. A Network.framework link would connect and then drop on
+    /// the first frame.
+    nonisolated static let controlTransports: Set<TransportStrategy> = [.posix]
+
     @Published var state: State = .idle
     @Published var peerName: String?
     /// The peer of the open session (for side channels such as clipboard sync).
@@ -137,7 +142,8 @@ final class ControlHost: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let link = try await TransportConnector.shared.connect(to: peer, localName: localName)
+                let link = try await TransportConnector.shared.connect(to: peer, localName: localName,
+                                                                       allowed: Self.controlTransports)
                 try await link.sendSecureObject(SessionHello(kind: .control, version: SessionHello.currentControlVersion))
                 // Wait for the peer to accept before we ever capture / hijack the cursor.
                 let ack = try await link.receiveSecureObject(ControlAck.self)

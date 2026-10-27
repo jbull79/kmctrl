@@ -36,6 +36,20 @@ final class TransportConnector {
     private var winner: [String: TransportStrategy] = [:]
     private let connectTimeout: TimeInterval = 6
 
+    /// Strategies to try, in order: the allowed ones, last-known-good first if it is allowed.
+    /// A cached winner outside `allowed` is ignored, so callers that need a specific transport
+    /// (control needs a raw socket) can't be routed onto another by an earlier fallback.
+    nonisolated static func attemptOrder(allowed: Set<TransportStrategy>,
+                             preferred: TransportStrategy?) -> [TransportStrategy] {
+        var order = TransportStrategy.allCases.filter { allowed.contains($0) }
+        if order.isEmpty { order = TransportStrategy.allCases }   // safety: never nothing to try
+        if let preferred, order.contains(preferred) {
+            order.removeAll { $0 == preferred }
+            order.insert(preferred, at: 0)
+        }
+        return order
+    }
+
     /// Connect + handshake to `peer`, returning a ready, authenticated link. `allowed`
     /// restricts which transport methods may be tried (user-toggleable for testing).
     func connect(to peer: Peer, localName: String,
@@ -43,12 +57,7 @@ final class TransportConnector {
         let resolved = await resolveHostPort(peer.endpoint)
         let key = resolved.map { "\($0.host):\($0.port)" } ?? peer.id
 
-        var order = TransportStrategy.allCases.filter { allowed.contains($0) }
-        if order.isEmpty { order = TransportStrategy.allCases }   // safety: never nothing to try
-        if let preferred = winner[key], order.contains(preferred) {   // try last-known-good first
-            order.removeAll { $0 == preferred }
-            order.insert(preferred, at: 0)
-        }
+        let order = Self.attemptOrder(allowed: allowed, preferred: winner[key])
 
         var lastError: Error?
         for strategy in order {
