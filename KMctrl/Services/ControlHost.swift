@@ -71,6 +71,7 @@ final class ControlHost: ObservableObject {
     // precise off-main timer so the cursor stream has a steady cadence (no Task.sleep /
     // main-actor jitter, which caused stutter).
     private let moveBuffer = MoveBuffer()
+    private let inputLag = InputLagMeter()   // main-thread delivery lag of captured input
     private let flushQueue = DispatchQueue(label: "netcatch.control.flush", qos: .userInteractive)
     private var flushTimer: DispatchSourceTimer?
 
@@ -370,7 +371,7 @@ final class ControlHost: ObservableObject {
 
     private func startFlushTimer() {
         flushTimer?.cancel()
-        let buf = moveBuffer; let box = linkBox
+        let buf = moveBuffer; let box = linkBox; let lag = inputLag
         let intervalMs = flushIntervalMs   // already validated by AppSettings
         let probes = ControlHost.sendsProbes(peerVersion: peerVersion)
         let timer = DispatchSource.makeTimerSource(queue: flushQueue)
@@ -399,7 +400,7 @@ final class ControlHost: ObservableObject {
                 lastPing = now
             }
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {
-                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(link.useBinaryControl ? "binary" : "json"))")
+                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(link.useBinaryControl ? "binary" : "json")), input lag max \(Int(lag.takeMax())) ms")
                 if probes { _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks))) }
                 sent = 0; ticks = 0; window = now
             }
@@ -435,6 +436,7 @@ final class ControlHost: ObservableObject {
                 return event.type == .systemDefined ? event : nil
             }
             if ce.kind == .mouseMove {
+                self.inputLag.note(eventTime: event.timestamp, now: ProcessInfo.processInfo.systemUptime)
                 self.moveBuffer.add(dx: ce.dx, dy: ce.dy, flags: ce.flags)   // coalesced, flushed by timer
             } else {
                 self.sendOnQueue(ce)                    // flushes pending move, keeps clicks positioned
