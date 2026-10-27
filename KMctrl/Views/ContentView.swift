@@ -133,6 +133,8 @@ struct ContentView: View {
 
     private func startControl(_ peer: Peer) {
         host.edgeModeEnabled = settings.useEdgeMode   // window mode unless edge mode is on
+        host.edgeHandoffSpike = settings.edgeHandoffSpike     // experimental: pointer-edge switch
+        host.returnAtEdge = settings.returnAtEdge             // experimental: push-back return
         host.controlEdge = settings.controlEdge
         host.controlDisplayID = settings.handoffDisplayID
         host.useBinaryControl = settings.binaryControl        // experimental codec flag

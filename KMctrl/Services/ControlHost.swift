@@ -60,6 +60,16 @@ final class ControlHost: ObservableObject {
     var edgeModeEnabled = false
     var controlEdge: ScreenEdge = .right     // which edge hands off (set by UI)
     var controlDisplayID: UInt32 = 0         // which monitor's edge (0 = whole desktop)
+    /// EXPERIMENTAL, set by the UI before `connect`: switch on the pointer resting at the
+    /// hand-off edge (window-mode capture, no event tap), and ask the peer to return control
+    /// when its pointer is pushed past the opposite edge.
+    var edgeHandoffSpike = false
+    var returnAtEdge = false
+    private var edgeWatcher: DispatchSourceTimer?
+    private var edgePanel: EdgeCapturePanel?
+    private var edgePanelResign: NSObjectProtocol?
+    private var previousApp: NSRunningApplication?
+    private var capturedViaEdge = false
     /// EXPERIMENTAL flags, set by the UI before `connect` (read at capture setup, so a
     /// change takes effect on the next connection — reconnect to A/B them).
     var useBinaryControl = false             // binary vs JSON control-event codec
@@ -159,11 +169,13 @@ final class ControlHost: ObservableObject {
                 self.peerFingerprint = link.remoteFingerprint
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
-                try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge, autoReturn: self.edgeModeEnabled))
+                try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge,
+                                                            autoReturn: self.edgeModeEnabled || self.returnAtEdge))
                 self.link = link
                 self.linkBox.link = link
                 self.state = .connected
                 if self.edgeModeEnabled { self.startEdgeMode() }
+                else if self.edgeHandoffSpike { self.startEdgeWatcher() }
                 self.startReturnReader(link: link)
                 DebugLog.log("control host: connected to \(peer.name) (protocol v\(ack.version))")
             } catch {
@@ -179,6 +191,8 @@ final class ControlHost: ObservableObject {
         let wasCapturing = state == .capturing
         endCapture()
         edge?.stop(); edge = nil
+        stopEdgeWatcher()
+        if edgePanel != nil { tearDownEdgePanel(restoreFocus: false) }
         let old = link
         link = nil
         linkBox.link = nil
@@ -280,7 +294,7 @@ final class ControlHost: ObservableObject {
 
     func endCapture() {
         guard state == .capturing else { return }
-        leaveCapture(warpInsideEdge: edgeModeEnabled)
+        leaveCapture(warpInsideEdge: edgeModeEnabled || capturedViaEdge)
     }
 
     /// Ask the controlled Mac to wake its display (v2 peers only). Sent automatically when
@@ -327,6 +341,95 @@ final class ControlHost: ObservableObject {
         }
     }
 
+    // MARK: Edge hand-off spike (no event tap)
+
+    /// Poll the pointer (readable with no permissions) and switch when it rests on the
+    /// hand-off edge of the chosen display.
+    private func startEdgeWatcher() {
+        stopEdgeWatcher()
+        let edge = controlEdge, displayID = controlDisplayID
+        var dwell = EdgeDwell()
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "kmctrl.edge-watch", qos: .userInitiated))
+        t.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+        t.setEventHandler { [weak self] in
+            guard let p = CGEvent(source: nil)?.location else { return }
+            let display = EdgeCapture.bounds(forDisplay: displayID)
+            if dwell.update(point: p, display: display, edge: edge, now: ProcessInfo.processInfo.systemUptime) {
+                Task { @MainActor in self?.edgeHandoff() }
+            }
+        }
+        t.resume()
+        edgeWatcher = t
+        DebugLog.log("control host: edge switch (experimental) watching the \(edge.rawValue) edge")
+    }
+
+    private func stopEdgeWatcher() { edgeWatcher?.cancel(); edgeWatcher = nil }
+
+    /// The pointer rested on the hand-off edge: take input focus with an invisible full-screen
+    /// panel and start window-mode capture. A non-activating panel can take keyboard focus
+    /// without KMctrl becoming the active app (which macOS may refuse to a background app);
+    /// app activation is the fallback. Logs which path worked, and skips the switch — leaving
+    /// the pointer alone — if neither did.
+    private func edgeHandoff() {
+        guard state == .connected, edgePanel == nil else { return }
+        let panel = EdgeCapturePanel.make(on: handoffScreen())
+        previousApp = NSWorkspace.shared.frontmostApplication
+        edgePanel = panel
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, self.edgePanel === panel else { return }
+            if panel.isKeyWindow { self.beginEdgeCapture(panel, via: "non-activating panel"); return }
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, self.edgePanel === panel else { return }
+                if panel.isKeyWindow { self.beginEdgeCapture(panel, via: "app activation"); return }
+                let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+                DebugLog.log("control host: edge switch skipped — macOS did not give KMctrl focus (front: \(front))", .warn)
+                self.tearDownEdgePanel(restoreFocus: false)
+            }
+        }
+    }
+
+    private func beginEdgeCapture(_ panel: EdgeCapturePanel, via path: String) {
+        guard state == .connected else { tearDownEdgePanel(restoreFocus: true); return }
+        DebugLog.log("control host: edge switch — focus via \(path) (app active: \(NSApp.isActive))")
+        capturedViaEdge = true
+        // If the panel loses focus (e.g. ⌘-Tab), keys would go elsewhere: release.
+        edgePanelResign = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.state == .capturing, self.capturedViaEdge else { return }
+                DebugLog.log("control host: edge capture lost focus — releasing", .warn)
+                self.endCapture()
+            }
+        }
+        installMonitor()
+        enterCapture()
+    }
+
+    private func tearDownEdgePanel(restoreFocus: Bool) {
+        if let o = edgePanelResign { NotificationCenter.default.removeObserver(o); edgePanelResign = nil }
+        edgePanel?.orderOut(nil); edgePanel = nil
+        capturedViaEdge = false
+        if restoreFocus, NSApp.isActive, let prev = previousApp, prev != NSRunningApplication.current {
+            prev.activate(options: [])                  // give focus back to what you were using
+        }
+        previousApp = nil
+    }
+
+    /// The hand-off display as an NSScreen (falls back to the screen under the pointer).
+    private func handoffScreen() -> NSScreen {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        if controlDisplayID != 0,
+           let s = NSScreen.screens.first(where: { ($0.deviceDescription[key] as? NSNumber)?.uint32Value == controlDisplayID }) {
+            return s
+        }
+        let m = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+
     private func waitForActivation(attempts: Int, _ done: @escaping (Bool) -> Void) {
         if NSApp.isActive || attempts == 0 { done(NSApp.isActive); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
@@ -366,6 +469,7 @@ final class ControlHost: ObservableObject {
             CGWarpMouseCursorPosition(p)
         }
         sendOnQueue(ControlEvent(kind: .releaseAll))   // flushes pending move + releaseAll
+        if capturedViaEdge { tearDownEdgePanel(restoreFocus: true) }
         DebugLog.log("control host: capture end")
     }
 

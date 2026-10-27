@@ -20,6 +20,12 @@ final class AppSettings: ObservableObject {
     /// Keep this Mac "active" (post a harmless F15 on an interval) so presence apps don't
     /// report Away. Local-only; needs Accessibility.
     @Published var keepAwakeEnabled: Bool { didSet { defaults.set(keepAwakeEnabled, forKey: Keys.keepAwake) } }
+    /// EXPERIMENTAL spike (controlling Mac): switch to the other Mac when the pointer rests on the
+    /// hand-off edge — by polling the pointer, so no Accessibility / Input Monitoring.
+    @Published var edgeHandoffSpike: Bool { didSet { defaults.set(edgeHandoffSpike, forKey: Keys.edgeHandoffSpike) } }
+    /// Controlling Mac: ask the other Mac to hand control back when its pointer is pushed past
+    /// the opposite edge (window mode as well as edge mode).
+    @Published var returnAtEdge: Bool { didSet { defaults.set(returnAtEdge, forKey: Keys.returnAtEdge) } }
     /// EXPERIMENTAL: encode forwarded control events as fixed binary instead of JSON on the
     /// controlling Mac (kills per-event JSONEncoder/Decoder cost). Self-describing on the
     /// wire — the controlled Mac auto-detects, so only the controller's flag matters.
@@ -55,6 +61,8 @@ final class AppSettings: ObservableObject {
         static let hideDock = "kmctrl.hideDockIcon"
         static let menuBar = "kmctrl.menuBarVisible"
         static let keepAwake = "kmctrl.keepAwakeEnabled"
+        static let edgeHandoffSpike = "kmctrl.edgeHandoffSpike"
+        static let returnAtEdge = "kmctrl.returnAtEdge"
         static let binaryControl = "kmctrl.binaryControl"
         static let flushInterval = "kmctrl.flushIntervalMs"
         static let mouseSensitivity = "kmctrl.mouseSensitivity"
@@ -89,6 +97,8 @@ final class AppSettings: ObservableObject {
         hideDockIcon = defaults.bool(forKey: Keys.hideDock)
         menuBarVisible = defaults.object(forKey: Keys.menuBar) as? Bool ?? true
         keepAwakeEnabled = defaults.bool(forKey: Keys.keepAwake)
+        edgeHandoffSpike = defaults.bool(forKey: Keys.edgeHandoffSpike)
+        returnAtEdge = defaults.bool(forKey: Keys.returnAtEdge)
         binaryControl = defaults.bool(forKey: Keys.binaryControl)
         flushIntervalMs = AppSettings.clampedFlushInterval(defaults.integer(forKey: Keys.flushInterval))
         mouseSensitivity = AppSettings.clampedMouseSensitivity(defaults.double(forKey: Keys.mouseSensitivity))

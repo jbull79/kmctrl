@@ -239,6 +239,15 @@ struct SettingsView: View {
             } footer: {
                 Text("Binary protocol encodes forwarded input as compact binary instead of JSON (removes per-event encode/decode cost). It's self-describing on the wire, so you only need it on the Mac doing the controlling. Flush interval sets how often coalesced mouse moves are sent — lower is smoother but more packets. Both take effect on the next connection: reconnect after changing them to A/B the feel.")
             }
+
+            Section {
+                Toggle("Switch to the other Mac at the screen edge", isOn: $settings.edgeHandoffSpike)
+                Toggle("Return control at the other Mac's edge", isOn: $settings.returnAtEdge)
+            } header: {
+                Text("Experimental — edge switching without permissions")
+            } footer: {
+                Text("Uses the edge from the arrangement above. Rest the pointer on that edge for a moment to take control; on the other Mac, push past the opposite edge to come back (never while a button is held). Needs no Accessibility or Input Monitoring on this Mac. Takes effect on the next connection. If macOS won't give KMctrl focus, the switch is skipped and noted in Diagnostics.")
+            }
         }
         .formStyle(.grouped)
         .onAppear { manager.readiness.refresh() }

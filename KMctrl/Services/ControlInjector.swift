@@ -20,7 +20,7 @@ final class ControlInjector: @unchecked Sendable {
     /// When the injected cursor reaches this edge, control should return to the host.
     var returnEdge: ScreenEdge?
     var onReturn: (() -> Void)?
-    private var wasAtReturnEdge = false
+    private var returnTrigger = EdgeReturnTrigger()
 
     // Pacing
     private let lock = NSLock()
@@ -133,24 +133,15 @@ final class ControlInjector: @unchecked Sendable {
     }
 
     private func moveBy(_ dx: Double, _ dy: Double) {
-        cursor.x = min(max(bounds.minX, cursor.x + dx), bounds.maxX - 1)
-        cursor.y = min(max(bounds.minY, cursor.y + dy), bounds.maxY - 1)
+        let intended = CGPoint(x: cursor.x + dx, y: cursor.y + dy)
+        cursor.x = min(max(bounds.minX, intended.x), bounds.maxX - 1)
+        cursor.y = min(max(bounds.minY, intended.y), bounds.maxY - 1)
         postMouse(mouseDown ? .leftMouseDragged : .mouseMoved, button: .left)
-        checkReturnEdge()
-    }
-
-    /// Fire onReturn once when the cursor first reaches the return edge.
-    private func checkReturnEdge() {
-        guard let e = returnEdge else { return }
-        let hit: Bool
-        switch e {
-        case .right:  hit = cursor.x >= bounds.maxX - 1
-        case .left:   hit = cursor.x <= bounds.minX
-        case .top:    hit = cursor.y <= bounds.minY
-        case .bottom: hit = cursor.y >= bounds.maxY - 1
+        // Return control after a deliberate push past the return edge, never mid-drag.
+        if let e = returnEdge, returnTrigger.shouldReturn(cursor: cursor, intended: intended, bounds: bounds,
+                                                          edge: e, buttonHeld: mouseDown) {
+            onReturn?()
         }
-        if hit && !wasAtReturnEdge { onReturn?() }
-        wasAtReturnEdge = hit
     }
 
     // MARK: CGEvent helpers
