@@ -10,7 +10,7 @@ import AppKit
 /// 200–500 ms gaps) is smoothed into even pointer motion instead of stutter. Clicks/keys
 /// flush the buffer first so they land at the right position.
 final class ControlInjector: @unchecked Sendable {
-    private let bounds: CGRect
+    private var bounds: CGRect
     private var cursor: CGPoint
     private var flags: CGEventFlags = []
     private var heldKeys: Set<CGKeyCode> = []
@@ -18,8 +18,11 @@ final class ControlInjector: @unchecked Sendable {
     private let source = CGEventSource(stateID: .hidSystemState)
 
     /// When the injected cursor reaches this edge, control should return to the host.
-    var returnEdge: ScreenEdge?
-    var onReturn: (() -> Void)?
+    private var returnEdge: ScreenEdge?
+    var onReturn: ((CGPoint) -> Void)?          // with where the pointer left
+    /// v4: the display and stretch of its edge that face the controller (nil = whole desktop).
+    private var returnArea: CGRect?
+    private var returnSpan: ClosedRange<Double>?
     private var returnTrigger = EdgeReturnTrigger()
 
     // Pacing
@@ -57,8 +60,30 @@ final class ControlInjector: @unchecked Sendable {
         releaseAll()
     }
 
+    /// Arm (or re-arm) the return edge from the controller's setup — at session start, and again
+    /// when either Mac's monitors change. The inject timer reads these, hence the lock.
+    func configureReturn(_ setup: ControlSetup) {
+        let span = setup.returnSpan.flatMap { $0.count == 2 && $0[0] <= $0[1] ? $0[0]...$0[1] : nil }
+        lock.lock()
+        returnEdge = setup.autoReturn ? setup.hostEdge.opposite : nil
+        returnArea = setup.returnArea?.rect
+        returnSpan = span
+        lock.unlock()
+    }
+
+    /// This Mac's monitors changed: re-read the desktop the cursor is kept inside.
+    func refreshDesktop() {
+        let b = EdgeCapture.desktopBounds()
+        lock.lock(); bounds = b; lock.unlock()
+    }
+
     func apply(_ e: ControlEvent) {
         switch e.kind {
+        case .enterAt:   // edge switch: start where the pointer crossed over, not where it last was
+            lock.lock(); pendDX = 0; pendDY = 0; let bounds = self.bounds; lock.unlock()
+            cursor = CGPoint(x: min(max(bounds.minX, e.dx), bounds.maxX - 1),
+                             y: min(max(bounds.minY, e.dy), bounds.maxY - 1))
+            postMouse(mouseDown ? .leftMouseDragged : .mouseMoved, button: .left)
         case .mouseMove:
             lock.lock()
             pendDX += e.dx; pendDY += e.dy
@@ -96,7 +121,7 @@ final class ControlInjector: @unchecked Sendable {
             releaseAll()
         case .mediaKey:
             postMediaKey(MediaKey(key: e.keyCode, isDown: e.button == 1, isRepeat: false))
-        case .hostStats, .ping, .wakeDisplay, .clipboard:
+        case .hostStats, .ping, .wakeDisplay, .clipboard, .edgeSetup:
             break   // control-plane only; never injected (client handles/echoes before apply)
         }
     }
@@ -133,14 +158,18 @@ final class ControlInjector: @unchecked Sendable {
     }
 
     private func moveBy(_ dx: Double, _ dy: Double) {
+        lock.lock()
+        let bounds = self.bounds, returnEdge = self.returnEdge, returnArea = self.returnArea, returnSpan = self.returnSpan
+        lock.unlock()
         let intended = CGPoint(x: cursor.x + dx, y: cursor.y + dy)
         cursor.x = min(max(bounds.minX, intended.x), bounds.maxX - 1)
         cursor.y = min(max(bounds.minY, intended.y), bounds.maxY - 1)
         postMouse(mouseDown ? .leftMouseDragged : .mouseMoved, button: .left)
         // Return control after a deliberate push past the return edge, never mid-drag.
-        if let e = returnEdge, returnTrigger.shouldReturn(cursor: cursor, intended: intended, bounds: bounds,
-                                                          edge: e, buttonHeld: mouseDown) {
-            onReturn?()
+        if let e = returnEdge, returnTrigger.shouldReturn(cursor: cursor, intended: intended,
+                                                          bounds: returnArea ?? bounds, edge: e,
+                                                          buttonHeld: mouseDown, span: returnSpan) {
+            onReturn?(cursor)
         }
     }
 

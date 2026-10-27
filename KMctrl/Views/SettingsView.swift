@@ -159,13 +159,14 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Use edge mode to drive another Mac", isOn: $settings.useEdgeMode)
-                ScreenArrangementView(edge: $settings.controlEdge, displayID: $settings.handoffDisplayID)
+                ScreenArrangementView(edge: $settings.controlEdge, displayID: $settings.handoffDisplayID,
+                                      offsetMM: $settings.handoffOffsetMM, remote: settings.remoteScreen)
                 Text("Bump the **\(settings.controlEdge.label.lowercased())** edge of the highlighted screen to take control; ⌃⌥⌘ releases.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: {
                 Text("Edge hand-off arrangement")
             } footer: {
-                Text("Drag the remote Mac next to the monitor it physically sits beside. On a multi-monitor setup only that screen's edge hands off. Edge mode needs Accessibility + Input Monitoring (below); window mode (click-to-capture) needs neither.")
+                Text("Drag the other Mac next to the monitor it physically sits beside, then slide it along that edge to where it really is — screens are drawn to physical size. Only the stretch of edge it touches hands off, and the pointer crosses at the matching place. Edge mode needs Accessibility + Input Monitoring (below); window mode (click-to-capture) needs neither.")
             }
 
             Section {

@@ -17,6 +17,8 @@ enum ControlEventKind: String, Codable {
     case mediaKey     // host→client media/aux key (keyCode = NX key type, button = 1 down / 0 up); protocol v2
     case wakeDisplay  // host→client: wake a sleeping display (IOPM user activity); not injected; protocol v2
     case clipboard    // host→client clipboard hand-off (payload in `clipboard`); JSON only; protocol v2
+    case enterAt      // host→client: edge switch entered here (dx, dy = controlled Mac's global points); protocol v4
+    case edgeSetup    // host→client: updated return edge/stretch after a monitor change (payload in `setup`); JSON only; protocol v4
 }
 
 /// Which screen edge of the controller hands off to the other Mac.
@@ -41,15 +43,18 @@ struct ControlAck: Codable {
     /// Control protocol version the controlled Mac speaks. Absent from 0.7.x peers → 1.
     /// The host only sends v2 features (`chars`, `.mediaKey`, `.wakeDisplay`) when ≥ 2.
     var version: Int = 1
+    /// The controlled Mac's main display (v4), so the controller can line up the edge switch.
+    var screen: ScreenGeometry? = nil
 
-    init(accepted: Bool, reason: String = "", version: Int = 1) {
-        self.accepted = accepted; self.reason = reason; self.version = version
+    init(accepted: Bool, reason: String = "", version: Int = 1, screen: ScreenGeometry? = nil) {
+        self.accepted = accepted; self.reason = reason; self.version = version; self.screen = screen
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         accepted = try c.decode(Bool.self, forKey: .accepted)
         reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? ""
         version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        screen = try c.decodeIfPresent(ScreenGeometry.self, forKey: .screen)
     }
 }
 
@@ -61,6 +66,11 @@ struct ControlSetup: Codable {
     /// Window (click-to-capture) mode must NOT — otherwise dragging to a screen edge
     /// silently drops control. Defaults false so older hosts don't arm auto-return.
     var autoReturn: Bool = false
+    /// v4: the controlled Mac's display that faces the controller, and the stretch of its facing
+    /// edge (its points, along the edge) that touches the controller's screen. Return only fires
+    /// there. Absent → the whole desktop edge, as before.
+    var returnArea: ScreenGeometry? = nil
+    var returnSpan: [Double]? = nil
 }
 
 /// Sent client→host when the client's cursor hits its return edge → host takes back.
@@ -72,11 +82,18 @@ struct ControlReturn: Codable {
     /// Controlled Mac's clipboard handed back when control is released (never a return).
     var clipboard: ClipboardPayload? = nil
 
-    init(ok: Bool = true, pong: Double? = nil, clipboard: ClipboardPayload? = nil) {
-        self.ok = ok; self.pong = pong; self.clipboard = clipboard
+    /// v4: where the pointer left the controlled Mac (its global points) on a return, so the
+    /// controller can land its pointer at the matching place.
+    var at: [Double]? = nil
+    /// v4: the controlled Mac's screen, re-sent when its monitors change (never a return).
+    var screen: ScreenGeometry? = nil
+
+    init(ok: Bool = true, pong: Double? = nil, clipboard: ClipboardPayload? = nil, at: [Double]? = nil,
+         screen: ScreenGeometry? = nil) {
+        self.ok = ok; self.pong = pong; self.clipboard = clipboard; self.at = at; self.screen = screen
     }
     /// A frame with a payload is not a return-of-control signal.
-    var isReturnSignal: Bool { pong == nil && clipboard == nil }
+    var isReturnSignal: Bool { pong == nil && clipboard == nil && screen == nil }
 }
 
 struct ControlEvent: Codable {
@@ -94,10 +111,12 @@ struct ControlEvent: Codable {
     /// Clipboard hand-off payload for `.clipboard` events. JSON only — such an event is never
     /// binary-encoded (`isBinaryEncodable`), whatever the sender's codec flag.
     var clipboard: ClipboardPayload? = nil
+    /// Updated return setup for `.edgeSetup` events (v4). JSON only, like `clipboard`.
+    var setup: ControlSetup? = nil
 
-    var isBinaryEncodable: Bool { kind != .clipboard && clipboard == nil }
+    var isBinaryEncodable: Bool { kind != .clipboard && kind != .edgeSetup && clipboard == nil && setup == nil }
 
-    enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars, clipboard }
+    enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars, clipboard, setup }
 
     // Custom encode so `chars` is omitted (not `null`) when nil; decode stays synthesized.
     func encode(to encoder: Encoder) throws {
@@ -112,6 +131,7 @@ struct ControlEvent: Codable {
         try c.encode(flags, forKey: .flags)
         try c.encodeIfPresent(chars, forKey: .chars)
         try c.encodeIfPresent(clipboard, forKey: .clipboard)
+        try c.encodeIfPresent(setup, forKey: .setup)
     }
 }
 
@@ -126,7 +146,7 @@ extension ControlEventKind {
     static let wireOrder: [ControlEventKind] = [
         .mouseMove, .mouseDown, .mouseUp, .scroll,
         .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping,
-        .mediaKey, .wakeDisplay, .clipboard
+        .mediaKey, .wakeDisplay, .clipboard, .enterAt, .edgeSetup
     ]
     var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
     init?(wireByte: UInt8) {

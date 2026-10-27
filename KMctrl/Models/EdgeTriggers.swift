@@ -2,15 +2,19 @@ import CoreGraphics
 import Foundation
 
 enum EdgeGeometry {
-    /// Is `p` on `edge` of `d` (the last pixel row/column), within `d`'s span on the other axis?
-    /// CG global coordinates: origin top-left, y grows downward.
-    static func isOnEdge(_ p: CGPoint, of d: CGRect, edge: ScreenEdge) -> Bool {
+    /// Is `p` on `edge` of `d` — its outermost row/column, *inside* the display — and, if
+    /// `span` is given, within that stretch along the edge? A pointer that has moved onto a
+    /// neighbouring monitor (e.g. one above) is beyond the edge, not on it. CG global
+    /// coordinates: origin top-left, y grows downward.
+    static func isOnEdge(_ p: CGPoint, of d: CGRect, edge: ScreenEdge, span: ClosedRange<Double>? = nil) -> Bool {
+        let onRow: Bool, along: Double
         switch edge {
-        case .right:  return p.x >= d.maxX - 1 && p.y >= d.minY && p.y < d.maxY
-        case .left:   return p.x <= d.minX     && p.y >= d.minY && p.y < d.maxY
-        case .top:    return p.y <= d.minY     && p.x >= d.minX && p.x < d.maxX
-        case .bottom: return p.y >= d.maxY - 1 && p.x >= d.minX && p.x < d.maxX
+        case .right:  onRow = p.x >= d.maxX - 1 && p.x < d.maxX     && p.y >= d.minY && p.y < d.maxY; along = p.y
+        case .left:   onRow = p.x >= d.minX     && p.x < d.minX + 1 && p.y >= d.minY && p.y < d.maxY; along = p.y
+        case .top:    onRow = p.y >= d.minY     && p.y < d.minY + 1 && p.x >= d.minX && p.x < d.maxX; along = p.x
+        case .bottom: onRow = p.y >= d.maxY - 1 && p.y < d.maxY     && p.x >= d.minX && p.x < d.maxX; along = p.x
         }
+        return onRow && (span?.contains(along) ?? true)
     }
 }
 
@@ -22,8 +26,10 @@ struct EdgeDwell {
     private var since: TimeInterval?
     private var armed = true
 
-    mutating func update(point: CGPoint, display: CGRect, edge: ScreenEdge, now: TimeInterval) -> Bool {
-        guard EdgeGeometry.isOnEdge(point, of: display, edge: edge) else { since = nil; armed = true; return false }
+    /// `span` limits it to the stretch of the edge the other Mac's screen touches.
+    mutating func update(point: CGPoint, display: CGRect, edge: ScreenEdge,
+                         span: ClosedRange<Double>? = nil, now: TimeInterval) -> Bool {
+        guard EdgeGeometry.isOnEdge(point, of: display, edge: edge, span: span) else { since = nil; armed = true; return false }
         guard armed else { return false }
         let start = since ?? now
         since = start
@@ -41,9 +47,10 @@ struct EdgeReturnTrigger {
     private var pushed = 0.0
 
     /// `intended` is where the move would have put the cursor before clamping to `bounds`.
+    /// `span` limits it to the stretch of the edge that faces the controlling Mac's screen.
     mutating func shouldReturn(cursor: CGPoint, intended: CGPoint, bounds b: CGRect,
-                               edge: ScreenEdge, buttonHeld: Bool) -> Bool {
-        guard !buttonHeld, EdgeGeometry.isOnEdge(cursor, of: b, edge: edge) else { pushed = 0; return false }
+                               edge: ScreenEdge, buttonHeld: Bool, span: ClosedRange<Double>? = nil) -> Bool {
+        guard !buttonHeld, EdgeGeometry.isOnEdge(cursor, of: b, edge: edge, span: span) else { pushed = 0; return false }
         let over: Double
         switch edge {
         case .right:  over = intended.x - (b.maxX - 1)

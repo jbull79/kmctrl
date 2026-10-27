@@ -38,6 +38,9 @@ final class ControlManager: ObservableObject {
     private(set) var controlledLink: PeerLink?
     /// On-screen "being controlled" badge (+ kill switch) shown while a remote drives us.
     private let badge = ControlBadgeController()
+    /// Re-reports this Mac's screen to the controller when monitors change mid-session.
+    private let screens = ScreenChangeWatcher()
+    private var reportedScreen: ScreenGeometry?
 
     /// End the control session from the controlled side (kick the controller off).
     func disconnectControlled() {
@@ -130,9 +133,11 @@ final class ControlManager: ObservableObject {
                     let accepted = self.trust.isTrusted(fp)
                         ? true
                         : await self.requestControlApproval(name: link.remoteName, fingerprint: fp)
+                    let screen = accepted ? ScreenGeometry.mainDisplay() : nil
                     try await link.sendSecureObject(ControlAck(
                         accepted: accepted, reason: accepted ? "" : "\(self.settings.deviceName) declined control",
-                        version: SessionHello.currentControlVersion))
+                        version: SessionHello.currentControlVersion, screen: screen))
+                    self.reportedScreen = screen
                     guard accepted else {
                         DebugLog.log("incoming: control declined", .warn)
                         link.cancel(); return
@@ -157,16 +162,14 @@ final class ControlManager: ObservableObject {
         badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
         clipboard.setActive(true, sessionFingerprint: link.remoteFingerprint)
         DebugLog.log("control: session started from \(name)")
+        let injector = ControlInjector()
+        screens.start { [weak self] in self?.screensChanged(link: link, injector: injector, hostVersion: hostVersion) }
         await Task.detached(priority: .userInitiated) {
-            let injector = ControlInjector()
             injector.start()
             defer { injector.stop() }
             do {
-                let setup = try await link.receiveSecureObject(ControlSetup.self)
-                if setup.autoReturn {
-                    injector.returnEdge = setup.hostEdge.opposite
-                    injector.onReturn = { _ = link.sendSecureObjectSync(ControlReturn()) }
-                }
+                injector.configureReturn(try await link.receiveSecureObject(ControlSetup.self))
+                injector.onReturn = { at in _ = link.sendSecureObjectSync(ControlReturn(at: [at.x, at.y])) }
                 var stats = ReceiveStats()
                 while true {
                     let event = try await link.receiveControlEvent()   // auto-detects JSON/binary codec
@@ -179,6 +182,10 @@ final class ControlManager: ObservableObject {
                     }
                     if event.kind == .hostStats { continue }
                     if event.kind == .wakeDisplay { DisplayWake.wake(); continue }
+                    if event.kind == .edgeSetup {           // the controller re-laid the screens out
+                        if let setup = event.setup { injector.configureReturn(setup) }
+                        continue
+                    }
                     if event.kind == .clipboard {
                         if let p = event.clipboard {
                             Task { @MainActor [weak self] in self?.clipboard.receive(p, from: link.remoteFingerprint) }
@@ -200,6 +207,7 @@ final class ControlManager: ObservableObject {
         // An old session can end late (keepalive reaping a link whose network went away)
         // after a newer one took over — only clear the shared state if it is still ours.
         if controlledLink === link {
+            screens.stop()
             clipboard.setActive(false, sessionFingerprint: "")
             controlActiveFrom = nil
             controlledLink = nil
@@ -207,6 +215,20 @@ final class ControlManager: ObservableObject {
         }
         link.cancel()
         DebugLog.log("control: session ended (\(name))")
+    }
+
+    /// Monitors changed while being controlled: keep the cursor inside the new desktop, and tell
+    /// a v4 controller our new screen so it can re-line the hand-off edge up (older ones would
+    /// read the report as a return of control).
+    private func screensChanged(link: PeerLink, injector: ControlInjector, hostVersion: Int) {
+        guard controlledLink === link else { return }
+        injector.refreshDesktop()
+        let screen = ScreenGeometry.mainDisplay()
+        guard hostVersion >= 4, screen != reportedScreen else { return }
+        reportedScreen = screen
+        DebugLog.log(String(format: "control: screen changed — now %.0f×%.0f pt, %.0f×%.0f mm; telling the controller",
+                            screen.width, screen.height, screen.widthMM, screen.heightMM))
+        _ = link.sendSecureObjectSync(ControlReturn(screen: screen))
     }
 
     // MARK: Status

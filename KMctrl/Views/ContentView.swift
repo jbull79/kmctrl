@@ -135,6 +135,9 @@ struct ContentView: View {
         host.edgeModeEnabled = settings.useEdgeMode   // window mode unless edge mode is on
         host.edgeHandoffSpike = settings.edgeHandoffSpike     // experimental: pointer-edge switch
         host.returnAtEdge = settings.returnAtEdge             // experimental: push-back return
+        host.handoffOffsetMM = settings.handoffOffsetMM       // where the other screen sits on the edge
+        host.remoteScreenFallback = settings.remoteScreen
+        host.onRemoteScreen = { settings.remoteScreen = $0 }  // remember its size for the arrangement
         host.controlEdge = settings.controlEdge
         host.controlDisplayID = settings.handoffDisplayID
         host.useBinaryControl = settings.binaryControl        // experimental codec flag

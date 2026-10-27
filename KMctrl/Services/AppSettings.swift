@@ -26,6 +26,18 @@ final class AppSettings: ObservableObject {
     /// Controlling Mac: ask the other Mac to hand control back when its pointer is pushed past
     /// the opposite edge (window mode as well as edge mode).
     @Published var returnAtEdge: Bool { didSet { defaults.set(returnAtEdge, forKey: Keys.returnAtEdge) } }
+    /// Where the other Mac's screen sits along the hand-off edge: mm from the edge's left/top
+    /// end, set by sliding it in the arrangement. nil = centred.
+    @Published var handoffOffsetMM: Double? {
+        didSet {
+            if let v = handoffOffsetMM { defaults.set(v, forKey: Keys.handoffOffset) }
+            else { defaults.removeObject(forKey: Keys.handoffOffset) }
+        }
+    }
+    /// The other Mac's screen as it last reported it — drawn to scale in the arrangement.
+    @Published var remoteScreen: ScreenGeometry? {
+        didSet { defaults.set(remoteScreen.flatMap { try? JSONEncoder().encode($0) }, forKey: Keys.remoteScreen) }
+    }
     /// EXPERIMENTAL: encode forwarded control events as fixed binary instead of JSON on the
     /// controlling Mac (kills per-event JSONEncoder/Decoder cost). Self-describing on the
     /// wire — the controlled Mac auto-detects, so only the controller's flag matters.
@@ -63,6 +75,8 @@ final class AppSettings: ObservableObject {
         static let keepAwake = "kmctrl.keepAwakeEnabled"
         static let edgeHandoffSpike = "kmctrl.edgeHandoffSpike"
         static let returnAtEdge = "kmctrl.returnAtEdge"
+        static let handoffOffset = "kmctrl.handoffOffsetMM"
+        static let remoteScreen = "kmctrl.remoteScreen"
         static let binaryControl = "kmctrl.binaryControl"
         static let flushInterval = "kmctrl.flushIntervalMs"
         static let mouseSensitivity = "kmctrl.mouseSensitivity"
@@ -99,6 +113,8 @@ final class AppSettings: ObservableObject {
         keepAwakeEnabled = defaults.bool(forKey: Keys.keepAwake)
         edgeHandoffSpike = defaults.bool(forKey: Keys.edgeHandoffSpike)
         returnAtEdge = defaults.bool(forKey: Keys.returnAtEdge)
+        handoffOffsetMM = defaults.object(forKey: Keys.handoffOffset) as? Double
+        remoteScreen = defaults.data(forKey: Keys.remoteScreen).flatMap { try? JSONDecoder().decode(ScreenGeometry.self, from: $0) }
         binaryControl = defaults.bool(forKey: Keys.binaryControl)
         flushIntervalMs = AppSettings.clampedFlushInterval(defaults.integer(forKey: Keys.flushInterval))
         mouseSensitivity = AppSettings.clampedMouseSensitivity(defaults.double(forKey: Keys.mouseSensitivity))

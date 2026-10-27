@@ -44,6 +44,8 @@ final class ControlHost: ObservableObject {
     /// Latency probes / host stats use event kinds that 0.5–0.7 peers don't know; an old
     /// peer drops the whole session on the first one, so only v2 peers get them.
     nonisolated static func sendsProbes(peerVersion: Int) -> Bool { peerVersion >= 2 }
+    /// `.edgeSetup` is v4; an older peer drops the session on the unknown kind.
+    nonisolated static func sendsEdgeSetup(peerVersion: Int) -> Bool { peerVersion >= 4 }
 
     nonisolated static func nowMs() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000.0 }
 
@@ -70,6 +72,17 @@ final class ControlHost: ObservableObject {
     private var edgePanelResign: NSObjectProtocol?
     private var previousApp: NSRunningApplication?
     private var capturedViaEdge = false
+    private var edgeModeStale = false           // edge-mode tap is on the old edge until capture ends
+    /// Arrangement, set by the UI before `connect`: where the other screen sits on the edge
+    /// (mm, nil = centred), and its last-known size. `onRemoteScreen` reports the real size.
+    var handoffOffsetMM: Double?
+    var remoteScreenFallback: ScreenGeometry?
+    var onRemoteScreen: ((ScreenGeometry) -> Void)?
+    private var handoff: HandoffGeometry?       // this session's edge mapping
+    private var remoteScreen: ScreenGeometry?   // the other Mac's screen, as last reported
+    private let screens = ScreenChangeWatcher() // re-lays the edge out when our monitors change
+    private var pendingEntry: CGPoint?          // where to put the remote pointer on an edge switch
+    private var returnLanding: CGPoint?         // where to put ours when the peer hands back
     /// EXPERIMENTAL flags, set by the UI before `connect` (read at capture setup, so a
     /// change takes effect on the next connection — reconnect to A/B them).
     var useBinaryControl = false             // binary vs JSON control-event codec
@@ -169,14 +182,15 @@ final class ControlHost: ObservableObject {
                 self.peerFingerprint = link.remoteFingerprint
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
-                try await link.sendSecureObject(ControlSetup(hostEdge: self.controlEdge,
-                                                            autoReturn: self.edgeModeEnabled || self.returnAtEdge))
+                if let s = ack.screen { self.onRemoteScreen?(s) }
+                try await link.sendSecureObject(self.layOutHandoff(remote: ack.screen ?? self.remoteScreenFallback ?? .assumedRemote))
                 self.link = link
                 self.linkBox.link = link
                 self.state = .connected
                 if self.edgeModeEnabled { self.startEdgeMode() }
                 else if self.edgeHandoffSpike { self.startEdgeWatcher() }
                 self.startReturnReader(link: link)
+                if ack.version >= 4 { self.screens.start { [weak self] in self?.screensChanged(remote: nil) } }
                 DebugLog.log("control host: connected to \(peer.name) (protocol v\(ack.version))")
             } catch {
                 self.lastError = error.localizedDescription
@@ -190,9 +204,11 @@ final class ControlHost: ObservableObject {
         if state != .idle { DebugLog.log("control host: disconnect (was \(state))") }
         let wasCapturing = state == .capturing
         endCapture()
-        edge?.stop(); edge = nil
+        edge?.stop(); edge = nil; edgeModeStale = false
         stopEdgeWatcher()
+        screens.stop()
         if edgePanel != nil { tearDownEdgePanel(restoreFocus: false) }
+        handoff = nil; remoteScreen = nil; pendingEntry = nil; returnLanding = nil
         let old = link
         link = nil
         linkBox.link = nil
@@ -222,6 +238,63 @@ final class ControlHost: ObservableObject {
         }
     }
 
+    /// Line the two screens up physically along the hand-off edge (arrangement + sizes) and
+    /// return the setup that arms the other Mac's matching return stretch.
+    private func layOutHandoff(remote: ScreenGeometry) -> ControlSetup {
+        // A hand-off monitor that has been unplugged falls back to the main display.
+        let id = controlDisplayID != 0 && CGDisplayIsOnline(controlDisplayID) != 0 ? controlDisplayID : CGMainDisplayID()
+        let local = ScreenGeometry.display(id)
+        let geo = HandoffGeometry(local: local, remote: remote, edge: controlEdge,
+                                  offsetMM: handoffOffsetMM ?? HandoffGeometry.centredOffsetMM(
+                                    local: local, remote: remote, edge: controlEdge))
+        handoff = geo
+        remoteScreen = remote
+        if let span = geo.localSpan {
+            DebugLog.log(String(format: "control host: hand-off stretch %.0f–%.0f pt of the %@ edge (other screen %.0f×%.0f mm)",
+                                span.lowerBound, span.upperBound, controlEdge.rawValue, remote.widthMM, remote.heightMM))
+        }
+        let armReturn = edgeModeEnabled || returnAtEdge
+        return ControlSetup(hostEdge: controlEdge, autoReturn: armReturn,
+                            returnArea: armReturn ? remote : nil,
+                            returnSpan: armReturn ? geo.remoteSpan.map { [$0.lowerBound, $0.upperBound] } : nil)
+    }
+
+    /// Either Mac's monitors changed mid-session (`remote` = the other Mac's new screen, nil =
+    /// ours changed).
+    private func screensChanged(remote: ScreenGeometry?) {
+        if let remote { onRemoteScreen?(remote) }
+        relayOut(remote: remote, because: remote == nil ? "this Mac's screens changed"
+                                                        : "\(peerName ?? "the other Mac")'s screens changed")
+    }
+
+    /// The arrangement was edited in Settings (screen slid along the edge, edge or monitor
+    /// changed): take it now, and re-lay out an open session with it.
+    func arrangementChanged(edge: ScreenEdge, displayID: UInt32, offsetMM: Double?) {
+        guard edge != controlEdge || displayID != controlDisplayID || offsetMM != handoffOffsetMM else { return }
+        controlEdge = edge; controlDisplayID = displayID; handoffOffsetMM = offsetMM
+        relayOut(because: "arrangement changed in Settings")
+    }
+
+    /// Re-lay the hand-off edge out mid-session (`remote` = the other Mac's new screen, nil = as
+    /// before), re-arm the other Mac's return stretch, and move the edge watcher / tap to it.
+    private func relayOut(remote: ScreenGeometry? = nil, because why: String) {
+        guard state != .idle, let current = remoteScreen else { return }
+        DebugLog.log("control host: \(why) — re-laying out the hand-off edge")
+        let setup = layOutHandoff(remote: remote ?? current)
+        if Self.sendsEdgeSetup(peerVersion: peerVersion) { sendOnQueue(ControlEvent(kind: .edgeSetup, setup: setup)) }
+        if edgeModeEnabled {
+            if state == .capturing { edgeModeStale = true } else { restartEdgeMode() }
+        } else if edgeHandoffSpike {
+            startEdgeWatcher()
+        }
+    }
+
+    private func restartEdgeMode() {
+        edgeModeStale = false
+        edge?.stop(); edge = nil
+        startEdgeMode()
+    }
+
     /// Read return signals from the client (its cursor reached the return edge) → take
     /// control back to this Mac.
     private func startReturnReader(link: PeerLink) {
@@ -240,6 +313,8 @@ final class ControlHost: ObservableObject {
                 if let sent = r.pong {
                     let rtt = ControlHost.nowMs() - sent                 // same host clock → no sync needed
                     await MainActor.run { self?.recordLatency(rtt) }
+                } else if let screen = r.screen {
+                    await MainActor.run { self?.screensChanged(remote: screen) }
                 } else if let payload = r.clipboard {
                     await MainActor.run {
                         guard let self else { return }
@@ -247,7 +322,12 @@ final class ControlHost: ObservableObject {
                     }
                 } else {
                     DebugLog.log("control host: peer signalled return of control")
-                    await MainActor.run { self?.endCapture() }           // real return-of-control signal
+                    let at = r.at.flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
+                    await MainActor.run {
+                        // Land our pointer where theirs crossed back, on the matching stretch.
+                        if let at, let g = self?.handoff { self?.returnLanding = g.returnPoint(leaving: at) }
+                        self?.endCapture()                               // real return-of-control signal
+                    }
                 }
             }
             // The peer is gone: release capture and the cursor now, don't wait for the next
@@ -295,6 +375,7 @@ final class ControlHost: ObservableObject {
     func endCapture() {
         guard state == .capturing else { return }
         leaveCapture(warpInsideEdge: edgeModeEnabled || capturedViaEdge)
+        if edgeModeStale { restartEdgeMode() }   // arrangement changed while we were away
     }
 
     /// Ask the controlled Mac to wake its display (v2 peers only). Sent automatically when
@@ -347,15 +428,19 @@ final class ControlHost: ObservableObject {
     /// hand-off edge of the chosen display.
     private func startEdgeWatcher() {
         stopEdgeWatcher()
-        let edge = controlEdge, displayID = controlDisplayID
+        guard let geo = handoff, let span = geo.localSpan else {
+            DebugLog.log("control host: edge switch off — the other screen doesn't touch the hand-off edge in the arrangement", .warn)
+            return
+        }
+        let edge = controlEdge, display = geo.local.rect
         var dwell = EdgeDwell()
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "kmctrl.edge-watch", qos: .userInitiated))
         t.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
         t.setEventHandler { [weak self] in
             guard let p = CGEvent(source: nil)?.location else { return }
-            let display = EdgeCapture.bounds(forDisplay: displayID)
-            if dwell.update(point: p, display: display, edge: edge, now: ProcessInfo.processInfo.systemUptime) {
-                Task { @MainActor in self?.edgeHandoff() }
+            if dwell.update(point: p, display: display, edge: edge, span: span, now: ProcessInfo.processInfo.systemUptime) {
+                let entry = geo.entryPoint(leaving: p)
+                Task { @MainActor in self?.edgeHandoff(entry: entry) }
             }
         }
         t.resume()
@@ -370,8 +455,9 @@ final class ControlHost: ObservableObject {
     /// without KMctrl becoming the active app (which macOS may refuse to a background app);
     /// app activation is the fallback. Logs which path worked, and skips the switch — leaving
     /// the pointer alone — if neither did.
-    private func edgeHandoff() {
+    private func edgeHandoff(entry: CGPoint?) {
         guard state == .connected, edgePanel == nil else { return }
+        pendingEntry = entry
         let panel = EdgeCapturePanel.make(on: handoffScreen())
         previousApp = NSWorkspace.shared.frontmostApplication
         edgePanel = panel
@@ -405,6 +491,9 @@ final class ControlHost: ObservableObject {
                 self.endCapture()
             }
         }
+        // Put the other Mac's pointer where ours crossed the edge (v4 peers), before any moves.
+        if let e = pendingEntry, peerVersion >= 4 { sendOnQueue(ControlEvent(kind: .enterAt, dx: e.x, dy: e.y)) }
+        pendingEntry = nil
         installMonitor()
         enterCapture()
     }
@@ -457,7 +546,13 @@ final class ControlHost: ObservableObject {
         flushTimer?.cancel(); flushTimer = nil
         CGAssociateMouseAndMouseCursorPosition(1)   // always restore the cursor
         CGDisplayShowCursor(CGMainDisplayID())
-        if warpInsideEdge {                         // move off the edge so it won't re-trigger
+        if let landing = returnLanding {            // handed back at the edge: cross at the matching place
+            CGWarpMouseCursorPosition(landing)
+        } else if warpInsideEdge, let g = handoff, let rs = g.remoteSpan {
+            // Released another way: land in the middle of the shared stretch, off the edge.
+            let mid = (rs.lowerBound + rs.upperBound) / 2
+            CGWarpMouseCursorPosition(g.returnPoint(leaving: CGPoint(x: mid, y: mid)))
+        } else if warpInsideEdge {                  // move off the edge so it won't re-trigger
             let b = EdgeCapture.bounds(forDisplay: controlDisplayID)  // the chosen monitor's edge
             let p: CGPoint
             switch controlEdge {
@@ -468,6 +563,7 @@ final class ControlHost: ObservableObject {
             }
             CGWarpMouseCursorPosition(p)
         }
+        returnLanding = nil
         sendOnQueue(ControlEvent(kind: .releaseAll))   // flushes pending move + releaseAll
         if capturedViaEdge { tearDownEdgePanel(restoreFocus: true) }
         DebugLog.log("control host: capture end")

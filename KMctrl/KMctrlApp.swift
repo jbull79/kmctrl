@@ -27,6 +27,12 @@ final class AppModel: ObservableObject {
         let settings = settings
         updates.isEnabled = { settings.updateCheckEnabled }
         settings.$mouseSensitivity.sink { v in host.mouseSensitivity = v }.store(in: &bag)
+        // Arrangement edits in Settings apply to an open session straight away. A drag commits
+        // edge, monitor and position together, so let the burst settle first.
+        settings.$controlEdge.combineLatest(settings.$handoffDisplayID, settings.$handoffOffsetMM)
+            .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
+            .sink { edge, display, offset in host.arrangementChanged(edge: edge, displayID: display, offsetMM: offset) }
+            .store(in: &bag)
         // Hotkey is live only while there is a session to re-enter.
         settings.$regrabHotkeyEnabled.combineLatest(host.$state)
             .map { on, state in on && state != .idle }
