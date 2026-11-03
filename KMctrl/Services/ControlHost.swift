@@ -116,6 +116,16 @@ final class ControlHost: ObservableObject {
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleResignActive() }
         }
+        // An edge switch can activate KMctrl just as capture starts; finishing activation may
+        // drop the pointer lock taken in `enterCapture`, so take it again.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.state == .capturing else { return }
+                DebugLog.log("control host: became active during capture — re-locking the pointer")
+                CGAssociateMouseAndMouseCursorPosition(0)
+            }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -351,7 +361,8 @@ final class ControlHost: ObservableObject {
                     let at = r.at.flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
                     await MainActor.run {
                         // Land our pointer where theirs crossed back, on the matching stretch.
-                        if let at, let g = self?.handoff { self?.returnLanding = g.returnPoint(leaving: at) }
+                        // Duplicate returns arrive after capture ended — don't let them set the next landing.
+                        if let at, let g = self?.handoff, self?.state == .capturing { self?.returnLanding = g.returnPoint(leaving: at) }
                         self?.endCapture()                               // real return-of-control signal
                     }
                 }
@@ -605,9 +616,24 @@ final class ControlHost: ObservableObject {
         var sent = 0, ticks = 0
         var window = DispatchTime.now()
         var lastPing = DispatchTime.now()
+        // The pointer is locked where capture began; if it moves, macOS dropped the lock. Only
+        // watched for edge switches — the path where the lock was seen to fail.
+        let watchPointer = capturedViaEdge
+        var pointer = PointerLock(anchor: CGEvent(source: nil)?.location ?? .zero)
+        var drifted = 0
         timer.setEventHandler { [weak self] in
             guard let link = box.link else { return }
             ticks += 1
+            if watchPointer, ticks % 4 == 0, let p = CGEvent(source: nil)?.location {   // ~30 Hz is plenty
+                switch pointer.check(p, now: ProcessInfo.processInfo.systemUptime) {
+                case .held: break
+                case .drifted: drifted += 1
+                case .relock:
+                    drifted += 1
+                    let anchor = pointer.anchor
+                    Task { @MainActor in self?.relockPointer(at: anchor) }
+                }
+            }
             if let move = buf.takeEvent() {
                 if link.sendControlEventSync(move) {
                     sent += 1
@@ -626,13 +652,22 @@ final class ControlHost: ObservableObject {
                 lastPing = now
             }
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {
-                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(link.useBinaryControl ? "binary" : "json")), input lag max \(Int(lag.takeMax())) ms")
+                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(link.useBinaryControl ? "binary" : "json")), input lag max \(Int(lag.takeMax())) ms\(drifted > 0 ? ", local pointer drifted \(drifted)×" : "")")
                 if probes { _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks))) }
-                sent = 0; ticks = 0; window = now
+                sent = 0; ticks = 0; drifted = 0; window = now
             }
         }
         timer.resume()
         flushTimer = timer
+    }
+
+    /// The local pointer moved while captured — macOS dropped the lock taken in `enterCapture`.
+    /// Put it back where capture began and lock it again.
+    private func relockPointer(at anchor: CGPoint) {
+        guard state == .capturing else { return }
+        DebugLog.log("control host: local pointer moved during capture — put back and re-locked", .warn)
+        CGWarpMouseCursorPosition(anchor)
+        CGAssociateMouseAndMouseCursorPosition(0)
     }
 
     private func installMonitor() {
