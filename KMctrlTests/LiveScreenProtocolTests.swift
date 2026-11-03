@@ -50,3 +50,24 @@ final class LiveArrangementTests: XCTestCase {
         XCTAssertNil(host.handoffOffsetMM)
     }
 }
+
+/// "Use edge mode" needs Accessibility + Input Monitoring, which an MDM Mac can't grant. Without
+/// them the session must fall back to the permission-free edge switch, not do nothing.
+final class EdgeSwitchChoiceTests: XCTestCase {
+    func testEdgeModeWithoutPermissionsFallsBackToThePointerWatcher() {
+        XCTAssertEqual(ControlHost.edgeSwitch(edgeMode: true, permitted: false, pointerWatch: true), .pointerWatch)
+    }
+
+    func testEdgeModeWithPermissionsUsesTheTap() {
+        XCTAssertEqual(ControlHost.edgeSwitch(edgeMode: true, permitted: true, pointerWatch: true), .tap)
+    }
+
+    func testWindowModeUsesThePointerWatcherWhenOn() {
+        XCTAssertEqual(ControlHost.edgeSwitch(edgeMode: false, permitted: true, pointerWatch: true), .pointerWatch)
+        XCTAssertEqual(ControlHost.edgeSwitch(edgeMode: false, permitted: false, pointerWatch: false), .off)
+    }
+
+    func testEdgeModeWithoutPermissionsOrWatcherIsOff() {
+        XCTAssertEqual(ControlHost.edgeSwitch(edgeMode: true, permitted: false, pointerWatch: false), .off)
+    }
+}

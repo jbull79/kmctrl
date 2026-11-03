@@ -13,4 +13,26 @@ enum DisplayWake {
             DebugLog.log("control: display wake failed (\(r))", .warn)
         }
     }
+
+    /// Count remote input as local use. Injected CGEvents don't reset macOS's idle-sleep timers,
+    /// so without this a Mac being driven sleeps one display-sleep period into the session.
+    /// Re-declares on the same assertion `id`, so it stays one assertion and one quiet call.
+    static func noteActivity(_ id: inout IOPMAssertionID) {
+        _ = IOPMAssertionDeclareUserActivity("KMctrl remote input" as CFString, kIOPMUserActiveLocal, &id)
+    }
+}
+
+/// Throttles `DisplayWake.noteActivity` to once per `interval` seconds of remote input — the
+/// declaration lasts a whole display-sleep period, so per-event calls would be wasted IPC.
+struct ActivityPulse {
+    var interval: Double = 30
+    private var last = -Double.infinity
+
+    init(interval: Double = 30) { self.interval = interval }
+
+    mutating func due(at now: Double) -> Bool {
+        guard now - last >= interval else { return false }
+        last = now
+        return true
+    }
 }

@@ -47,7 +47,7 @@ struct MenuBarView: View {
                     settings.controlEnabled = on
                     if !on { manager.disconnectControlled() }
                 }
-            Toggle("Keep active (prevent Away)", isOn: $keepAwake)
+            Toggle("Keep awake (no sleep, no Away)", isOn: $keepAwake)
                 .toggleStyle(.switch).controlSize(.mini)
                 .onChange(of: keepAwake) { on in
                     settings.keepAwakeEnabled = on

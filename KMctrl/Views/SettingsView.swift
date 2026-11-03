@@ -95,7 +95,7 @@ struct SettingsView: View {
                 Text("Checks github.com/jbull79/kmctrl/releases. Downloads open in your browser; the app does not update itself.")
             }
             Section {
-                Toggle("Keep this Mac active (prevent Away)", isOn: $keepAwake)
+                Toggle("Keep this Mac awake (no sleep, no Away)", isOn: $keepAwake)
                     .onChange(of: keepAwake) { on in
                         settings.keepAwakeEnabled = on
                         model.keepAwake.setEnabled(on)
@@ -106,11 +106,11 @@ struct SettingsView: View {
                     }
                 if keepAwake {
                     if manager.readiness.accessibility {
-                        Label("Active — keeping this Mac awake.", systemImage: "checkmark.circle.fill")
+                        Label("On — this Mac won't idle-sleep and stays Available.", systemImage: "checkmark.circle.fill")
                             .font(.caption).foregroundStyle(.green)
                     } else {
                         HStack(spacing: Theme.s2) {
-                            Label("Needs Accessibility — not working until granted (may be blocked by MDM).",
+                            Label("Keeping this Mac awake. Preventing Away needs Accessibility (may be blocked by MDM).",
                                   systemImage: "exclamationmark.triangle.fill")
                                 .font(.caption).foregroundStyle(.orange)
                             Spacer()

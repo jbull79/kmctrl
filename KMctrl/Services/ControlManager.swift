@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import IOKit.pwr_mgt
 
 /// Owns the *controlled* side: listens for inbound connections, runs the authenticated
 /// handshake, and routes `.control` sessions to a `ControlInjector` (and `.status` queries to
@@ -171,6 +172,8 @@ final class ControlManager: ObservableObject {
                 injector.configureReturn(try await link.receiveSecureObject(ControlSetup.self))
                 injector.onReturn = { at in _ = link.sendSecureObjectSync(ControlReturn(at: [at.x, at.y])) }
                 var stats = ReceiveStats()
+                var pulse = ActivityPulse()                 // remote input keeps us awake like local use
+                var activity: IOPMAssertionID = 0
                 while true {
                     let event = try await link.receiveControlEvent()   // auto-detects JSON/binary codec
                     if let line = stats.record(isMove: event.kind == .mouseMove, at: ControlHost.nowMs() / 1000) {
@@ -198,6 +201,9 @@ final class ControlManager: ObservableObject {
                         Task { @MainActor [weak self] in self?.clipboard.pushNow(reason: "control released") }
                     }
                     injector.apply(event)
+                    if event.kind != .releaseAll, pulse.due(at: ControlHost.nowMs() / 1000) {
+                        DisplayWake.noteActivity(&activity)
+                    }
                 }
             } catch {
                 injector.releaseAll()

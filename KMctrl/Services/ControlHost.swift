@@ -47,6 +47,16 @@ final class ControlHost: ObservableObject {
     /// `.edgeSetup` is v4; an older peer drops the session on the unknown kind.
     nonisolated static func sendsEdgeSetup(peerVersion: Int) -> Bool { peerVersion >= 4 }
 
+    /// How a session switches at the edge: edge mode's event tap, the permission-free pointer
+    /// watcher (experimental), or not at all.
+    enum EdgeSwitch: Equatable { case tap, pointerWatch, off }
+    /// Edge mode's tap needs Accessibility + Input Monitoring, which an MDM Mac can't grant.
+    /// Without them the session falls back to the pointer watcher (when on) instead of nothing.
+    nonisolated static func edgeSwitch(edgeMode: Bool, permitted: Bool, pointerWatch: Bool) -> EdgeSwitch {
+        if edgeMode && permitted { return .tap }
+        return pointerWatch ? .pointerWatch : .off
+    }
+
     nonisolated static func nowMs() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000.0 }
 
     private func recordLatency(_ rtt: Double) {
@@ -180,6 +190,19 @@ final class ControlHost: ObservableObject {
                 }
                 self.peerVersion = ack.version
                 self.peerFingerprint = link.remoteFingerprint
+                // Safe permission reads only — probing a live tap on an MDM Mac can get us killed.
+                let edgeSwitch = Self.edgeSwitch(edgeMode: self.edgeModeEnabled,
+                                                 permitted: AXIsProcessTrusted() && CGPreflightListenEventAccess(),
+                                                 pointerWatch: self.edgeHandoffSpike)
+                if self.edgeModeEnabled && edgeSwitch != .tap {
+                    self.edgeModeEnabled = false        // this session runs as window mode
+                    if edgeSwitch == .pointerWatch {
+                        DebugLog.log("control host: edge mode lacks Accessibility / Input Monitoring — using the experimental edge switch", .warn)
+                    } else {
+                        self.lastError = "Edge mode needs Accessibility + Input Monitoring (grant them in Settings → Control)."
+                        DebugLog.log("control host: edge mode lacks Accessibility / Input Monitoring — window mode only", .warn)
+                    }
+                }
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
                 if let s = ack.screen { self.onRemoteScreen?(s) }
@@ -187,8 +210,11 @@ final class ControlHost: ObservableObject {
                 self.link = link
                 self.linkBox.link = link
                 self.state = .connected
-                if self.edgeModeEnabled { self.startEdgeMode() }
-                else if self.edgeHandoffSpike { self.startEdgeWatcher() }
+                switch edgeSwitch {
+                case .tap: self.startEdgeMode()
+                case .pointerWatch: self.startEdgeWatcher()
+                case .off: break
+                }
                 self.startReturnReader(link: link)
                 if ack.version >= 4 { self.screens.start { [weak self] in self?.screensChanged(remote: nil) } }
                 DebugLog.log("control host: connected to \(peer.name) (protocol v\(ack.version))")
