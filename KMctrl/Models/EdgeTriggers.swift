@@ -92,3 +92,14 @@ struct PointerLock {
         return .relock
     }
 }
+
+/// Which app gets focus back when an edge switch ends: the app in front when it began, unless
+/// that was KMctrl or a menu-bar agent (Ice grabs focus when the pointer rests on the menu bar,
+/// which is where a top-edge switch waits) — then the last ordinary app used.
+enum FocusRestore {
+    static func target<App: Equatable>(front: App?, frontIsRegular: Bool, lastRegular: App?, me: App) -> App? {
+        if let front, front != me, frontIsRegular { return front }
+        if let lastRegular, lastRegular != me { return lastRegular }
+        return nil
+    }
+}

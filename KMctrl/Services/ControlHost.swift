@@ -81,6 +81,8 @@ final class ControlHost: ObservableObject {
     private var edgePanel: EdgeCapturePanel?
     private var edgePanelResign: NSObjectProtocol?
     private var previousApp: NSRunningApplication?
+    private var lastRegularApp: NSRunningApplication?   // last ordinary app in front (not KMctrl, not a menu-bar agent)
+    private var captureAnchor: CGPoint?                  // where the local pointer is held while capturing
     private var capturedViaEdge = false
     private var edgeModeStale = false           // edge-mode tap is on the old edge until capture ends
     /// Arrangement, set by the UI before `connect`: where the other screen sits on the edge
@@ -116,15 +118,26 @@ final class ControlHost: ObservableObject {
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleResignActive() }
         }
-        // An edge switch can activate KMctrl just as capture starts; finishing activation may
-        // drop the pointer lock taken in `enterCapture`, so take it again.
+        // macOS only honours the pointer lock while KMctrl is the frontmost app. An edge switch
+        // takes the keyboard with a non-activating panel and then asks to come to the front;
+        // once it does, put the pointer back where capture began and lock it again.
         NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.state == .capturing else { return }
                 DebugLog.log("control host: became active during capture — re-locking the pointer")
+                if self.capturedViaEdge {
+                    self.edgePanel?.makeKey()
+                    if let a = self.captureAnchor { CGWarpMouseCursorPosition(a) }
+                }
                 CGAssociateMouseAndMouseCursorPosition(0)
             }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.activationPolicy == .regular, app != NSRunningApplication.current else { return }
+            Task { @MainActor in self?.lastRegularApp = app }
         }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -502,7 +515,9 @@ final class ControlHost: ObservableObject {
         guard state == .connected, edgePanel == nil else { return }
         pendingEntry = entry
         let panel = EdgeCapturePanel.make(on: handoffScreen())
-        previousApp = NSWorkspace.shared.frontmostApplication
+        let front = NSWorkspace.shared.frontmostApplication
+        previousApp = FocusRestore.target(front: front, frontIsRegular: front?.activationPolicy == .regular,
+                                          lastRegular: lastRegularApp, me: NSRunningApplication.current)
         edgePanel = panel
         panel.orderFrontRegardless()
         panel.makeKey()
@@ -525,12 +540,18 @@ final class ControlHost: ObservableObject {
         guard state == .connected else { tearDownEdgePanel(restoreFocus: true); return }
         DebugLog.log("control host: edge switch — focus via \(path) (app active: \(NSApp.isActive)) — \(edgeDiagnostics())")
         capturedViaEdge = true
-        // If the panel loses focus (e.g. ⌘-Tab), keys would go elsewhere: release.
+        // If the panel loses focus to another app (e.g. ⌘-Tab), keys would go elsewhere: release.
+        // If it lost it to one of our own windows (KMctrl coming to the front), take it back.
         edgePanelResign = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.state == .capturing, self.capturedViaEdge else { return }
-                DebugLog.log("control host: edge capture lost focus — releasing", .warn)
+                if let k = NSApp.keyWindow, k !== panel {
+                    DebugLog.log("control host: edge capture focus moved to a KMctrl window — taking it back")
+                    panel.makeKey()
+                    return
+                }
+                DebugLog.log("control host: edge capture lost focus — releasing (front: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"))", .warn)
                 self.endCapture()
             }
         }
@@ -539,6 +560,22 @@ final class ControlHost: ObservableObject {
         pendingEntry = nil
         installMonitor()
         enterCapture()
+        bringToFrontForPointerLock()
+    }
+
+    /// The panel has the keyboard, but macOS applies the pointer lock (and hidden cursor) only
+    /// while KMctrl is the frontmost app — with Ice or Code in front the work pointer moved with
+    /// the home one. Ask to come to the front; `didBecomeActive` then re-locks.
+    private func bringToFrontForPointerLock() {
+        guard state == .capturing, !NSRunningApplication.current.isActive else { return }
+        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+        DebugLog.log("control host: bringing KMctrl to the front for the pointer lock (front: \(front))")
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.state == .capturing, !NSRunningApplication.current.isActive else { return }
+            let now = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+            DebugLog.log("control host: macOS kept \(now) in front — the pointer lock may not hold", .warn)
+        }
     }
 
     private func tearDownEdgePanel(restoreFocus: Bool) {
@@ -571,6 +608,7 @@ final class ControlHost: ObservableObject {
 
     private func enterCapture() {
         guard state == .connected else { return }
+        captureAnchor = CGEvent(source: nil)?.location
         CGDisplayHideCursor(CGMainDisplayID())
         CGAssociateMouseAndMouseCursorPosition(0)   // decouple hardware mouse from cursor
         if !edgeModeEnabled { pinWindowsToAllSpaces(true) }
@@ -587,6 +625,7 @@ final class ControlHost: ObservableObject {
         hint.hide()
         if !edgeModeEnabled { pinWindowsToAllSpaces(false) }
         flushTimer?.cancel(); flushTimer = nil
+        captureAnchor = nil
         CGAssociateMouseAndMouseCursorPosition(1)   // always restore the cursor
         CGDisplayShowCursor(CGMainDisplayID())
         if let landing = returnLanding {            // handed back at the edge: cross at the matching place
@@ -625,7 +664,7 @@ final class ControlHost: ObservableObject {
         // The pointer is locked where capture began; if it moves, macOS dropped the lock. Only
         // watched for edge switches — the path where the lock was seen to fail.
         let watchPointer = capturedViaEdge
-        var pointer = PointerLock(anchor: CGEvent(source: nil)?.location ?? .zero)
+        var pointer = PointerLock(anchor: captureAnchor ?? CGEvent(source: nil)?.location ?? .zero)
         var drifted = 0
         timer.setEventHandler { [weak self] in
             guard let link = box.link else { return }
@@ -680,7 +719,7 @@ final class ControlHost: ObservableObject {
         let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
         guard let panel = edgePanel else { return "no panel, front: \(front)" }
         let overPanel = NSMouseInRect(NSEvent.mouseLocation, panel.frame, false)
-        return "panel on active Space: \(panel.isOnActiveSpace), visible: \(panel.isVisible), key: \(panel.isKeyWindow), pointer over panel: \(overPanel), front: \(front)"
+        return "KMctrl frontmost: \(NSRunningApplication.current.isActive), panel on active Space: \(panel.isOnActiveSpace), key: \(panel.isKeyWindow), pointer over panel: \(overPanel), front: \(front)"
     }
 
     /// The local pointer moved while captured — macOS dropped the lock taken in `enterCapture`.
