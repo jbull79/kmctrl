@@ -15,7 +15,11 @@ final class EdgeCapturePanel: NSPanel {
         p.acceptsMouseMovedEvents = true
         p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
-        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        // `.fullScreenAuxiliary`: also appear over a full-screen app's Space. Without it the
+        // panel isn't on screen there, KMctrl doesn't own the pointer, and macOS ignores the
+        // pointer lock (the work pointer moved with the home one after a Space switch).
+        // Safe on an NSPanel; only SwiftUI's `.fullScreenPrimary` windows conflict with it.
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         p.setFrame(screen.frame, display: false)
         return p
     }

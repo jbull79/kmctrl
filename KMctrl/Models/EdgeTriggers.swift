@@ -68,19 +68,26 @@ struct EdgeReturnTrigger {
 /// Controlling Mac, while capturing: the pointer is decoupled from the mouse and must stay at
 /// `anchor`. If it moves, macOS dropped the lock (seen when an edge switch activates KMctrl just
 /// as capture starts), so capture puts it back and re-locks — at most every `relockGap`, since a
-/// warp briefly suppresses the hardware mouse.
+/// warp briefly suppresses the hardware mouse. After `maxRelocks` tries in one capture it gives
+/// up (`.gaveUp`, once): when re-locking doesn't stick — seen after the controlling Mac switched
+/// Space — a pointer yanked back twice a second is worse than one that drifts.
 struct PointerLock {
-    enum State: Equatable { case held, drifted, relock }
+    enum State: Equatable { case held, drifted, relock, gaveUp }
     static let tolerance = 2.0
     static let relockGap = 0.5
+    static let maxRelocks = 3
     let anchor: CGPoint
     private var lastRelock = -Double.infinity
+    private var relocks = 0
+    private var gaveUp = false
 
     init(anchor: CGPoint) { self.anchor = anchor }
 
     mutating func check(_ p: CGPoint, now: Double) -> State {
         guard abs(p.x - anchor.x) > Self.tolerance || abs(p.y - anchor.y) > Self.tolerance else { return .held }
-        guard now - lastRelock >= Self.relockGap else { return .drifted }
+        guard !gaveUp, now - lastRelock >= Self.relockGap else { return .drifted }
+        guard relocks < Self.maxRelocks else { gaveUp = true; return .gaveUp }
+        relocks += 1
         lastRelock = now
         return .relock
     }

@@ -130,7 +130,13 @@ final class ControlHost: ObservableObject {
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.state == .capturing else { return }
-                DebugLog.log("control host: active Space changed during capture (system swipe gesture?)", .warn)
+                DebugLog.log("control host: active Space changed during capture (system swipe gesture?) — \(self.edgeDiagnostics())", .warn)
+                // Bring the capture panel onto the new Space and take the pointer lock again.
+                if self.capturedViaEdge, let panel = self.edgePanel {
+                    panel.orderFrontRegardless()
+                    panel.makeKey()
+                    CGAssociateMouseAndMouseCursorPosition(0)
+                }
             }
         }
     }
@@ -517,7 +523,7 @@ final class ControlHost: ObservableObject {
 
     private func beginEdgeCapture(_ panel: EdgeCapturePanel, via path: String) {
         guard state == .connected else { tearDownEdgePanel(restoreFocus: true); return }
-        DebugLog.log("control host: edge switch — focus via \(path) (app active: \(NSApp.isActive))")
+        DebugLog.log("control host: edge switch — focus via \(path) (app active: \(NSApp.isActive)) — \(edgeDiagnostics())")
         capturedViaEdge = true
         // If the panel loses focus (e.g. ⌘-Tab), keys would go elsewhere: release.
         edgePanelResign = NotificationCenter.default.addObserver(
@@ -632,6 +638,12 @@ final class ControlHost: ObservableObject {
                     drifted += 1
                     let anchor = pointer.anchor
                     Task { @MainActor in self?.relockPointer(at: anchor) }
+                case .gaveUp:
+                    drifted += 1
+                    Task { @MainActor in
+                        guard let self, self.state == .capturing else { return }
+                        DebugLog.log("control host: pointer lock isn't holding — stopped putting the pointer back (\(self.edgeDiagnostics()))", .warn)
+                    }
                 }
             }
             if let move = buf.takeEvent() {
@@ -659,6 +671,16 @@ final class ControlHost: ObservableObject {
         }
         timer.resume()
         flushTimer = timer
+    }
+
+    /// What decides whether macOS honours the pointer lock during an edge capture: is the
+    /// capture panel on the current Space and on screen, which app is in front, and is the
+    /// pointer over the panel.
+    private func edgeDiagnostics() -> String {
+        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+        guard let panel = edgePanel else { return "no panel, front: \(front)" }
+        let overPanel = NSMouseInRect(NSEvent.mouseLocation, panel.frame, false)
+        return "panel on active Space: \(panel.isOnActiveSpace), visible: \(panel.isVisible), key: \(panel.isKeyWindow), pointer over panel: \(overPanel), front: \(front)"
     }
 
     /// The local pointer moved while captured — macOS dropped the lock taken in `enterCapture`.
