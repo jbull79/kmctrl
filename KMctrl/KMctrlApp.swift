@@ -44,12 +44,15 @@ final class AppModel: ObservableObject {
         // Mac, a ControlReturn back to the controller; as the controller, a .clipboard event.
         manager.clipboard.transport = { payload, _ in
             if let link = manager.controlledLink {
-                guard link.sendSecureObjectSync(ControlReturn(clipboard: payload)) else { throw LinkError.closed }
+                // Off the main thread: a large image on a stalled link must not freeze the app.
+                let sent = await Task.detached { link.sendSecureObjectSync(ControlReturn(clipboard: payload)) }.value
+                guard sent else { throw LinkError.closed }
             } else {
                 try host.sendClipboard(payload)
             }
         }
         host.onClipboardReceived = { payload, fp in manager.clipboard.receive(payload, from: fp) }
+        host.hostCheck = { name, fp in manager.trust.checkHost(name: name, fingerprint: fp) }
         var previous: ControlHost.State = .idle
         host.$state.removeDuplicates()
             .sink { state in
@@ -69,7 +72,14 @@ final class AppModel: ObservableObject {
             .store(in: &bag)
     }
 
+    private var started = false
+
+    /// Once per launch. It runs from the main window's onAppear, which fires again for every
+    /// window opened later — each extra run leaked an update timer and rebound the listener.
     func start() {
+        guard !started else { return }
+        started = true
+        _ = HealthMonitor.appStarted
         signal(SIGPIPE, SIG_IGN)   // belt and braces for SO_NOSIGPIPE: never die on a closed peer
         // Load the identity key now, off the main thread. A Keychain read blocks its caller
         // until any password prompt is answered; doing it lazily on the main thread during a

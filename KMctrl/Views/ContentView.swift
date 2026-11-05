@@ -31,7 +31,7 @@ struct ContentView: View {
             Button("Allow") { manager.resolveControlPending(true) }
         } message: {
             if let r = manager.pendingControlRequest {
-                Text("“\(r.peerName)” wants to control this Mac's keyboard and mouse.\nFingerprint: \(r.fingerprint)\n\nAllowing trusts this device for future control.")
+                Text("A Mac calling itself “\(r.peerName)” wants to control this Mac's keyboard and mouse.\n\nFingerprint: \(r.fingerprint)\n\nAny Mac can choose that name — only Allow if the fingerprint matches the one shown in KMctrl on your other Mac. Allowing trusts it for future control.")
             }
         }
     }

@@ -124,6 +124,10 @@ final class POSIXByteStream: ByteStream, @unchecked Sendable {
         setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probes, socklen_t(MemoryLayout<Int32>.size))
     }
 
+    /// A stream dropped without close() (an error path) must not keep its socket — and the
+    /// other Mac's session behind it — open until KMctrl quits.
+    deinit { close() }
+
     /// Mark this socket latency-critical (voice service class) so Wi-Fi power-save
     /// coalescing doesn't batch small control frames into 100s-of-ms bursts. Applied only
     /// to control links (not bulk transfers).

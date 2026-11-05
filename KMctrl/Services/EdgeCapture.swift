@@ -103,6 +103,11 @@ final class EdgeCapture: @unchecked Sendable {
     }
 
     private func setCapturing(_ v: Bool) { lock.lock(); capturing = v; lock.unlock() }
+
+    /// Control came back from the other Mac (it pushed past its return edge, or capture ended
+    /// another way): stop swallowing local input. Without this the tap kept consuming every
+    /// key and click after the other Mac handed control back.
+    func release() { setCapturing(false) }
     private var isCapturing: Bool { lock.lock(); defer { lock.unlock() }; return capturing }
 
     fileprivate func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {

@@ -23,7 +23,9 @@ ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/KMctrl/KMctrl.entitlements"
 
 if ! security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null | grep -q "$CERT_NAME"; then
   echo "Creating local signing certificate '$CERT_NAME'…"
+  umask 077                                  # the private key is never readable by others
   TMP=$(mktemp -d)
+  trap 'rm -rf "$TMP"' EXIT                  # never leave key.pem behind, even on failure
   cat > "$TMP/cfg" <<EOF
 [req]
 distinguished_name=dn
@@ -40,11 +42,13 @@ EOF
   # `security import` (MAC verification), so we avoid the .p12 path.
   openssl genrsa -out "$TMP/key.pem" 2048 2>/dev/null
   openssl req -x509 -new -key "$TMP/key.pem" -days 3650 -out "$TMP/cert.pem" -config "$TMP/cfg" 2>/dev/null
-  security import "$TMP/cert.pem" -k "$KEYCHAIN" -A -T /usr/bin/codesign >/dev/null
-  security import "$TMP/key.pem"  -k "$KEYCHAIN" -A -T /usr/bin/codesign >/dev/null
-  rm -rf "$TMP"
+  # Only codesign may use the key. (-A would let ANY program sign as KMctrl, and macOS
+  # would then hand that program KMctrl's Accessibility permission.)
+  security import "$TMP/cert.pem" -k "$KEYCHAIN" >/dev/null
+  security import "$TMP/key.pem"  -k "$KEYCHAIN" -T /usr/bin/codesign >/dev/null
 fi
 
-codesign --force --deep --sign "$CERT_NAME" --entitlements "$ENTITLEMENTS" "$APP"
+# Hardened runtime: no DYLD_* injection or unsigned libraries borrowing KMctrl's permissions.
+codesign --force --deep --options runtime --sign "$CERT_NAME" --entitlements "$ENTITLEMENTS" "$APP"
 echo "Signed: $APP"
 codesign -d -r- "$APP" 2>&1 | grep designated || true

@@ -62,6 +62,14 @@ final class AppSettings: ObservableObject {
 
     private let defaults = UserDefaults.standard
 
+    /// A value from this app's own saved settings only. `UserDefaults.standard` also reads
+    /// launch arguments (`-kmctrl.controlEnabled YES`) and the global domain, which any
+    /// program running as this user can set — so security switches must not come from there.
+    static func savedValue(_ key: String) -> Any? {
+        guard let id = Bundle.main.bundleIdentifier else { return nil }
+        return UserDefaults.standard.persistentDomain(forName: id)?[key]
+    }
+
     enum Keys {
         static let deviceName = "kmctrl.deviceName"
         static let port = "kmctrl.port"
@@ -104,7 +112,7 @@ final class AppSettings: ObservableObject {
         deviceName = defaults.string(forKey: Keys.deviceName) ?? Host.current().localizedName ?? "My Mac"
         let storedPort = defaults.integer(forKey: Keys.port)
         port = storedPort == 0 ? 51236 : UInt16(storedPort)   // distinct from NetCatch (51234) so both can coexist
-        controlEnabled = defaults.bool(forKey: Keys.control)
+        controlEnabled = AppSettings.savedValue(Keys.control) as? Bool ?? false
         controlEdge = ScreenEdge(rawValue: defaults.string(forKey: Keys.controlEdge) ?? "") ?? .right
         useEdgeMode = defaults.bool(forKey: Keys.edgeMode)
         handoffDisplayID = UInt32(defaults.integer(forKey: Keys.handoffDisplay))
@@ -114,14 +122,16 @@ final class AppSettings: ObservableObject {
         edgeHandoffSpike = defaults.bool(forKey: Keys.edgeHandoffSpike)
         returnAtEdge = defaults.bool(forKey: Keys.returnAtEdge)
         handoffOffsetMM = defaults.object(forKey: Keys.handoffOffset) as? Double
-        remoteScreen = defaults.data(forKey: Keys.remoteScreen).flatMap { try? JSONDecoder().decode(ScreenGeometry.self, from: $0) }
+        remoteScreen = defaults.data(forKey: Keys.remoteScreen)
+            .flatMap { try? JSONDecoder().decode(ScreenGeometry.self, from: $0) }
+            .flatMap { $0.isPlausible ? $0 : nil }   // a bad saved value used to crash Settings
         binaryControl = defaults.bool(forKey: Keys.binaryControl)
         flushIntervalMs = AppSettings.clampedFlushInterval(defaults.integer(forKey: Keys.flushInterval))
         mouseSensitivity = AppSettings.clampedMouseSensitivity(defaults.double(forKey: Keys.mouseSensitivity))
         regrabHotkeyEnabled = defaults.object(forKey: Keys.regrabHotkey) as? Bool ?? true
         updateCheckEnabled = defaults.object(forKey: Keys.updateCheck) as? Bool ?? true
         clipboardSyncEnabled = defaults.object(forKey: Keys.clipboardSync) as? Bool ?? true
-        showControlledBadge = defaults.object(forKey: Keys.showControlledBadge) as? Bool ?? true
+        showControlledBadge = AppSettings.savedValue(Keys.showControlledBadge) as? Bool ?? true
         if let stored = defaults.array(forKey: Keys.transports) as? [String], !stored.isEmpty {
             enabledTransports = Set(stored)
         } else {

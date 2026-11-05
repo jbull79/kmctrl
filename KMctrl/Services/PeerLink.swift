@@ -73,7 +73,17 @@ final class PeerLink: @unchecked Sendable {
     /// auto-detects the format, so only the sender's choice matters.
     var useBinaryControl = false
 
-    init(stream: ByteStream) { self.stream = stream }
+    init(stream: ByteStream) {
+        self.stream = stream
+        Self.countLock.lock(); Self.live += 1; Self.countLock.unlock()
+    }
+
+    deinit { Self.countLock.lock(); Self.live -= 1; Self.countLock.unlock() }
+
+    /// Links still in memory (Diagnostics health line): a number that keeps growing is a leak.
+    private static let countLock = NSLock()
+    nonisolated(unsafe) private static var live = 0
+    static var liveCount: Int { countLock.lock(); defer { countLock.unlock() }; return live }
 
     /// Convenience for the NWListener fallback path.
     convenience init(connection: NWConnection) { self.init(stream: NWByteStream(connection)) }
@@ -123,7 +133,7 @@ final class PeerLink: @unchecked Sendable {
         sessionKey = try CryptoService.deriveSessionKey(ephemeralPrivate: ephemeral,
                                                         remoteEphemeralPublicRaw: incoming.ephemeralPub,
                                                         localEphemeralPublicRaw: ephemeralPub)
-        remoteName = incoming.name
+        remoteName = PeerName.sanitize(incoming.name)   // chosen by the peer: display text only
         remoteFingerprint = CryptoService.fingerprint(of: incoming.identityPub)
     }
 

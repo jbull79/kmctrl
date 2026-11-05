@@ -14,7 +14,8 @@ final class ControlInjector: @unchecked Sendable {
     private var cursor: CGPoint
     private var flags: CGEventFlags = []
     private var heldKeys: Set<CGKeyCode> = []
-    private var mouseDown = false
+    private var mouseDown = false            // left button held: moves are drags
+    private var heldButtons: Set<Int> = []   // every button held, so releaseAll lets go of all of them
     private let source = CGEventSource(stateID: .hidSystemState)
 
     /// When the injected cursor reaches this edge, control should return to the host.
@@ -63,10 +64,13 @@ final class ControlInjector: @unchecked Sendable {
     /// Arm (or re-arm) the return edge from the controller's setup — at session start, and again
     /// when either Mac's monitors change. The inject timer reads these, hence the lock.
     func configureReturn(_ setup: ControlSetup) {
-        let span = setup.returnSpan.flatMap { $0.count == 2 && $0[0] <= $0[1] ? $0[0]...$0[1] : nil }
+        let span = setup.returnSpan.flatMap {
+            $0.count == 2 && $0.allSatisfy(\.isFinite) && $0[0] <= $0[1] ? $0[0]...$0[1] : nil
+        }
+        let area = setup.returnArea.flatMap { $0.isPlausible ? $0.rect : nil }
         lock.lock()
         returnEdge = setup.autoReturn ? setup.hostEdge.opposite : nil
-        returnArea = setup.returnArea?.rect
+        returnArea = area
         returnSpan = span
         lock.unlock()
     }
@@ -77,7 +81,8 @@ final class ControlInjector: @unchecked Sendable {
         lock.lock(); bounds = b; lock.unlock()
     }
 
-    func apply(_ e: ControlEvent) {
+    func apply(_ raw: ControlEvent) {
+        guard let e = raw.sanitizedForInjection() else { return }   // out-of-range values used to crash
         switch e.kind {
         case .enterAt:   // edge switch: start where the pointer crossed over, not where it last was
             lock.lock(); pendDX = 0; pendDY = 0; let bounds = self.bounds; lock.unlock()
@@ -92,10 +97,12 @@ final class ControlInjector: @unchecked Sendable {
         case .mouseDown:
             flushPendingMove()
             if e.button == 0 { mouseDown = true }
+            heldButtons.insert(e.button)
             postMouse(downType(e.button), button: cgButton(e.button))
         case .mouseUp:
             flushPendingMove()
             if e.button == 0 { mouseDown = false }
+            heldButtons.remove(e.button)
             postMouse(upType(e.button), button: cgButton(e.button))
         case .scroll:
             scrollRemX += e.scrollX; scrollRemY += e.scrollY
@@ -129,7 +136,10 @@ final class ControlInjector: @unchecked Sendable {
     func releaseAll() {
         for key in heldKeys { postKey(key, down: false) }
         heldKeys.removeAll()
-        if mouseDown { postMouse(.leftMouseUp, button: .left); mouseDown = false }
+        if mouseDown { heldButtons.insert(0) }
+        for b in heldButtons.sorted() { postMouse(upType(b), button: cgButton(b)) }
+        heldButtons.removeAll()
+        mouseDown = false
         flags = []
     }
 

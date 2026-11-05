@@ -68,7 +68,11 @@ struct MenuBarView: View {
             if let a = updates.available {
                 Button("Update to \(a.version)…") { NSWorkspace.shared.open(a.url) }
             }
-            Button("Open KMctrl") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+            Button("Open KMctrl") {
+                // Bring back the one main window; opening another each time piled them up.
+                if let w = model.mainWindow { w.makeKeyAndOrderFront(nil) } else { openWindow(id: "main") }
+                NSApp.activate(ignoringOtherApps: true)
+            }
             if #available(macOS 14, *) {
                 SettingsLink { Text("Settings…") }
             } else {

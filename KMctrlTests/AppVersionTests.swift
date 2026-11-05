@@ -40,10 +40,12 @@ final class AppVersionTests: XCTestCase {
 
     @MainActor
     func testEvaluateIgnoresOlderAndUnparseable() {
-        let url = URL(string: "https://example/a.zip")!
+        let url = URL(string: "https://github.com/jbull79/kmctrl/releases/download/v99.0/KMctrl-99.0.zip")!
         XCTAssertNil(UpdateChecker.evaluate(tag: "v0.0.1", url: url))
         XCTAssertNil(UpdateChecker.evaluate(tag: "nightly", url: url))
         XCTAssertEqual(UpdateChecker.evaluate(tag: "v99.0", url: url)?.version, "99.0")
+        // A newer version offered from anywhere but this project's releases is ignored.
+        XCTAssertNil(UpdateChecker.evaluate(tag: "v99.0", url: URL(string: "https://example/a.zip")!))
     }
 
     func testUpdateErrorsAreExplained() {

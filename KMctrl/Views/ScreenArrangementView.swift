@@ -77,7 +77,8 @@ struct ScreenArrangementView: View {
     }
 
     private static func inches(_ g: ScreenGeometry) -> Int {
-        Int((hypot(g.widthMM, g.heightMM) / 25.4).rounded())
+        let d = (hypot(g.widthMM, g.heightMM) / 25.4).rounded()
+        return d.isFinite && d >= 0 && d < 10_000 ? Int(d) : 0   // never trap on a bad size
     }
 
     private func cgID(_ s: NSScreen) -> UInt32 {

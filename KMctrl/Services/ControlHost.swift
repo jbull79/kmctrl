@@ -25,6 +25,21 @@ final class ControlHost: ObservableObject {
     var mainWindowProvider: () -> NSWindow? = { nil }
     /// The controlled Mac handed its clipboard back (over the control link, on release).
     var onClipboardReceived: (ClipboardPayload, String) -> Void = { _, _ in }
+    /// Checks the Mac we connected to against the fingerprint pinned for that name (pinning it
+    /// the first time). Wired to `TrustStore.checkHost`.
+    var hostCheck: (_ name: String, _ fingerprint: String) -> HostPins.Check = { _, _ in .firstUse }
+    /// Bumped by every connect and disconnect, so a connect that finishes after Disconnect
+    /// was clicked is thrown away instead of going live.
+    private var connectGeneration = 0
+    /// When we last told the other Mac to release everything (ms, `nowMs`). Its clipboard is
+    /// only taken shortly after that — the hand-back — not at any moment it likes.
+    private var releaseSentAt = -Double.infinity
+    /// Held while connected: no App Nap or timer coalescing on the input path.
+    private var activity: NSObjectProtocol?
+    private let health = HealthMonitor()
+    /// Mirror of "capturing" for the edge watcher's own queue: it doesn't need to poll then.
+    private let capturingFlag = LockedFlag()
+    nonisolated static let clipboardReturnWindowMs = 5_000.0
 
     /// Hand our clipboard to the controlled Mac over the control link (outbound only — no
     /// inbound connection to this Mac is ever needed). v2 peers only.
@@ -202,14 +217,33 @@ final class ControlHost: ObservableObject {
     func connect(to peer: Peer, localName: String) {
         guard state == .idle else { return }
         state = .connecting; peerName = peer.name; currentPeer = peer; lastError = nil
+        connectGeneration &+= 1
+        let generation = connectGeneration
         Task { [weak self] in
             guard let self else { return }
+            var opened: PeerLink?          // closed on any failure below, so it never leaks
             do {
                 let link = try await TransportConnector.shared.connect(to: peer, localName: localName,
                                                                        allowed: Self.controlTransports)
+                opened = link
+                guard self.connectGeneration == generation else { link.cancel(); return }   // Disconnect clicked meanwhile
+                // Is this the Mac we paired with under that name? Anything else would receive
+                // every key we type, so refuse it before sending anything.
+                switch self.hostCheck(peer.name, link.remoteFingerprint) {
+                case .match: break
+                case .firstUse:
+                    DebugLog.log("control host: first connection to \(peer.name) — remembering its fingerprint \(link.remoteFingerprint)")
+                case .mismatch(let expected):
+                    link.cancel()
+                    self.lastError = "The Mac answering as “\(peer.name)” is not the one you paired with (fingerprint \(link.remoteFingerprint), expected \(expected)). If you reinstalled it, remove it under Settings → Trusted Macs and connect again."
+                    self.state = .idle
+                    DebugLog.log("control host: refused \(peer.name) — fingerprint \(link.remoteFingerprint) does not match the pinned \(expected)", .error)
+                    return
+                }
                 try await link.sendSecureObject(SessionHello(kind: .control, version: SessionHello.currentControlVersion))
                 // Wait for the peer to accept before we ever capture / hijack the cursor.
                 let ack = try await link.receiveSecureObject(ControlAck.self)
+                guard self.connectGeneration == generation else { link.cancel(); return }
                 guard ack.accepted else {
                     link.cancel()
                     self.lastError = ack.reason.isEmpty ? "\(peer.name) is not accepting control." : ack.reason
@@ -234,11 +268,17 @@ final class ControlHost: ObservableObject {
                 }
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
                 link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
-                if let s = ack.screen { self.onRemoteScreen?(s) }
-                try await link.sendSecureObject(self.layOutHandoff(remote: ack.screen ?? self.remoteScreenFallback ?? .assumedRemote))
+                let reported = ack.screen.flatMap { $0.isPlausible ? $0 : nil }   // a bad size used to crash Settings
+                if let s = reported { self.onRemoteScreen?(s) }
+                try await link.sendSecureObject(self.layOutHandoff(remote: reported ?? self.remoteScreenFallback ?? .assumedRemote))
+                guard self.connectGeneration == generation else { link.cancel(); return }
                 self.link = link
                 self.linkBox.link = link
                 self.state = .connected
+                self.activity = ProcessInfo.processInfo.beginActivity(
+                    options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                    reason: "Forwarding keyboard and mouse to \(peer.name)")
+                self.health.start()
                 switch edgeSwitch {
                 case .tap: self.startEdgeMode()
                 case .pointerWatch: self.startEdgeWatcher()
@@ -248,6 +288,8 @@ final class ControlHost: ObservableObject {
                 if ack.version >= 4 { self.screens.start { [weak self] in self?.screensChanged(remote: nil) } }
                 DebugLog.log("control host: connected to \(peer.name) (protocol v\(ack.version))")
             } catch {
+                opened?.cancel()
+                guard self.connectGeneration == generation else { return }   // already disconnected
                 self.lastError = error.localizedDescription
                 self.state = .idle
                 DebugLog.log("control host: connect failed — \(error.localizedDescription)", .error)
@@ -257,6 +299,7 @@ final class ControlHost: ObservableObject {
 
     func disconnect() {
         if state != .idle { DebugLog.log("control host: disconnect (was \(state))") }
+        connectGeneration &+= 1                      // a connect still in flight must not go live
         let wasCapturing = state == .capturing
         endCapture()
         edge?.stop(); edge = nil; edgeModeStale = false
@@ -269,6 +312,8 @@ final class ControlHost: ObservableObject {
         linkBox.link = nil
         state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil; peerFingerprint = nil
         latency = LatencyStats()
+        if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
+        health.stop()
         if wasCapturing, let old {
             // Let the queued releaseAll go out and give the peer a moment to hand its
             // clipboard back over the same link before we tear it down.
@@ -369,10 +414,17 @@ final class ControlHost: ObservableObject {
                     let rtt = ControlHost.nowMs() - sent                 // same host clock → no sync needed
                     await MainActor.run { self?.recordLatency(rtt) }
                 } else if let screen = r.screen {
+                    guard screen.isPlausible else {
+                        DebugLog.log("control host: ignoring an impossible screen size from the peer", .warn); continue
+                    }
                     await MainActor.run { self?.screensChanged(remote: screen) }
                 } else if let payload = r.clipboard {
                     await MainActor.run {
                         guard let self else { return }
+                        // Only the hand-back right after control returns, never at random.
+                        guard ControlHost.nowMs() - self.releaseSentAt < Self.clipboardReturnWindowMs else {
+                            DebugLog.log("control host: ignored a clipboard push from the peer outside a hand-back", .warn); return
+                        }
                         self.onClipboardReceived(payload, link.remoteFingerprint)
                     }
                 } else {
@@ -388,7 +440,8 @@ final class ControlHost: ObservableObject {
             }
             // The peer is gone: release capture and the cursor now, don't wait for the next
             // mouse move to discover the dead socket.
-            await MainActor.run { if self?.state != .idle { self?.disconnect() } }
+            // Only if it is still this link's session: a stale reader must not end a newer one.
+            await MainActor.run { if let self, self.link === link, self.state != .idle { self.disconnect() } }
         }
     }
 
@@ -489,11 +542,12 @@ final class ControlHost: ObservableObject {
             return
         }
         let edge = controlEdge, display = geo.local.rect
+        let capturing = capturingFlag
         var dwell = EdgeDwell()
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "kmctrl.edge-watch", qos: .userInitiated))
         t.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
         t.setEventHandler { [weak self] in
-            guard let p = CGEvent(source: nil)?.location else { return }
+            guard !capturing.value, let p = CGEvent(source: nil)?.location else { return }   // idle while capturing
             if dwell.update(point: p, display: display, edge: edge, span: span, now: ProcessInfo.processInfo.systemUptime) {
                 let entry = geo.entryPoint(leaving: p)
                 Task { @MainActor in self?.edgeHandoff(entry: entry) }
@@ -608,6 +662,7 @@ final class ControlHost: ObservableObject {
 
     private func enterCapture() {
         guard state == .connected else { return }
+        capturingFlag.value = true
         captureAnchor = CGEvent(source: nil)?.location
         CGDisplayHideCursor(CGMainDisplayID())
         CGAssociateMouseAndMouseCursorPosition(0)   // decouple hardware mouse from cursor
@@ -620,6 +675,7 @@ final class ControlHost: ObservableObject {
     }
 
     private func leaveCapture(warpInsideEdge: Bool) {
+        capturingFlag.value = false
         state = .connected                          // set first — prevents reentrancy
         lastCaptureEnd = Date()
         hint.hide()
@@ -646,6 +702,8 @@ final class ControlHost: ObservableObject {
             CGWarpMouseCursorPosition(p)
         }
         returnLanding = nil
+        edge?.release()                              // edge tap: stop swallowing local input
+        releaseSentAt = ControlHost.nowMs()          // the clipboard hand-back may follow
         sendOnQueue(ControlEvent(kind: .releaseAll))   // flushes pending move + releaseAll
         if capturedViaEdge { tearDownEdgePanel(restoreFocus: true) }
         DebugLog.log("control host: capture end")
@@ -835,5 +893,15 @@ final class ControlHost: ObservableObject {
         if mf.contains(.capsLock) { cg.insert(.maskAlphaShift) }
         if mf.contains(.function) { cg.insert(.maskSecondaryFn) }
         return cg.rawValue
+    }
+}
+
+/// A Bool shared with a timer on another queue.
+final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v = false
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return v }
+        set { lock.lock(); v = newValue; lock.unlock() }
     }
 }

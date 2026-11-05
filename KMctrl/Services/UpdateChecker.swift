@@ -91,8 +91,16 @@ final class UpdateChecker: ObservableObject {
         }
     }
 
+    /// The "Update available" link opens in the browser, so it must point at this project's
+    /// releases on GitHub — not wherever a tampered response or stored value says.
+    nonisolated static func isReleaseURL(_ url: URL) -> Bool {
+        url.scheme == "https" && url.host?.lowercased() == "github.com" && url.user == nil
+            && url.port == nil && url.path.hasPrefix("/jbull79/kmctrl")
+    }
+
     /// nil unless `tag` parses and is strictly newer than the running app.
     static func evaluate(tag: String, url: URL) -> Available? {
+        guard isReleaseURL(url) else { return nil }   // only ever offer a link to this project's releases
         guard let latest = AppVersion(tag), let cur = AppVersion.current, cur < latest else { return nil }
         return Available(version: latest.parts.map(String.init).joined(separator: "."), url: url)
     }

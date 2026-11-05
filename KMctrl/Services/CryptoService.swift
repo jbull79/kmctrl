@@ -35,9 +35,18 @@ enum CryptoService {
 
     private static func loadOrCreateIdentity() -> Curve25519.Signing.PrivateKey {
         keychainLoadCount += 1
-        if let raw = keychainLoad(),
-           let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw) {
-            return key
+        switch keychainLoad() {
+        case .found(let raw):
+            if let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw) { return key }
+            // Unreadable bytes: fall through and replace them.
+        case .notFound:
+            break
+        case .failed(let status):
+            // Locked, denied or cancelled prompt: the key is still there. Use a throwaway key
+            // for this launch rather than deleting it — that used to replace this Mac's
+            // identity, so every paired Mac had to pair again.
+            DebugLog.log("identity: Keychain read failed (\(status)) — using a temporary identity until KMctrl restarts", .error)
+            return Curve25519.Signing.PrivateKey()
         }
         // One-time migration from the earlier UserDefaults storage.
         if let raw = UserDefaults.standard.data(forKey: identityKeyDefaultsKey),
@@ -59,13 +68,25 @@ enum CryptoService {
          kSecAttrAccount as String: keychainAccount]
     }
 
-    private static func keychainLoad() -> Data? {
+    enum KeychainRead: Equatable { case found(Data), notFound, failed(OSStatus) }
+
+    /// Only `errSecItemNotFound` means there is no identity yet; any other failure must not
+    /// lead to a new one being saved over the real key.
+    static func classify(status: OSStatus, data: Data?) -> KeychainRead {
+        switch status {
+        case errSecSuccess: return data.map { .found($0) } ?? .failed(status)
+        case errSecItemNotFound: return .notFound
+        default: return .failed(status)
+        }
+    }
+
+    private static func keychainLoad() -> KeychainRead {
         var query = keychainBaseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        return status == errSecSuccess ? result as? Data : nil
+        return classify(status: status, data: result as? Data)
     }
 
     private static func keychainSave(_ data: Data) {

@@ -42,15 +42,36 @@ final class DebugLog: ObservableObject {
         Task { @MainActor in shared.append(message, level) }
     }
 
+    /// Lines wait here and are published at most twice a second: each publish makes an open
+    /// Diagnostics view re-diff up to 1000 rows on the main thread, the thread input runs on.
+    private var pending: [Entry] = []
+    private var flushScheduled = false
+
     private func append(_ message: String, _ level: Level) {
-        entries.append(Entry(time: Date(), level: level, message: message))
-        if entries.count > 1000 { entries.removeFirst(entries.count - 1000) }
+        pending.append(Entry(time: Date(), level: level, message: message))
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            self?.flush()
+        }
     }
 
-    func clear() { entries = [] }
+    private func flush() {
+        flushScheduled = false
+        guard !pending.isEmpty else { return }
+        var next = entries
+        next.append(contentsOf: pending)
+        pending.removeAll()
+        if next.count > 1000 { next.removeFirst(next.count - 1000) }
+        entries = next
+    }
+
+    func clear() { pending.removeAll(); entries = [] }
 
     func transcript() -> String {
-        entries.map { "\(Self.stamp.string(from: $0.time))  [\($0.level.rawValue.uppercased())]  \($0.message)" }
+        flush()
+        return entries.map { "\(Self.stamp.string(from: $0.time))  [\($0.level.rawValue.uppercased())]  \($0.message)" }
             .joined(separator: "\n")
     }
 }

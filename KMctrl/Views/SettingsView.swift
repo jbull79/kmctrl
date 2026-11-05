@@ -157,6 +157,8 @@ struct SettingsView: View {
                 Text("When on, another trusted Mac can control this one (you confirm the first time). The badge sits bottom-right; the menu bar always shows who is controlling with a Disconnect button.")
             }
 
+            TrustedMacsSection(trust: manager.trust)
+
             Section {
                 Toggle("Use edge mode to drive another Mac", isOn: $settings.useEdgeMode)
                 ScreenArrangementView(edge: $settings.controlEdge, displayID: $settings.handoffDisplayID,

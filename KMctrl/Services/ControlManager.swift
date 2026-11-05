@@ -13,11 +13,16 @@ final class ControlApprovalRequest: ObservableObject, Identifiable {
     let id = UUID()
     let peerName: String
     let fingerprint: String
-    private let respond: (Bool) -> Void
+    private var respond: ((Bool) -> Void)?
     init(peerName: String, fingerprint: String, respond: @escaping (Bool) -> Void) {
         self.peerName = peerName; self.fingerprint = fingerprint; self.respond = respond
     }
-    func resolve(_ accepted: Bool) { respond(accepted) }
+    /// Answers once; a later answer (the timeout after a click, or the reverse) is ignored.
+    func resolve(_ accepted: Bool) {
+        let r = respond
+        respond = nil
+        r?(accepted)
+    }
 }
 
 @MainActor
@@ -33,6 +38,10 @@ final class ControlManager: ObservableObject {
     @Published var controlActiveFrom: String?
     /// A first-time request from an untrusted peer to control this Mac.
     @Published var pendingControlRequest: ControlApprovalRequest?
+    /// An unanswered Allow prompt is declined after this long, freeing the connection.
+    static let approvalTimeout: TimeInterval = 60
+    /// A connection that has finished the handshake must say what it wants within this long.
+    static let helloTimeout: TimeInterval = 15
 
     /// The link of the active inbound control session, so this Mac can end it (and hand
     /// its clipboard back over it).
@@ -112,7 +121,11 @@ final class ControlManager: ObservableObject {
             do {
                 try await link.start()
                 try await link.handshake(localName: self.settings.deviceName)
+                // Don't let a peer sit on a connection slot after the handshake without asking
+                // for anything (24 slots; a stranger could otherwise hold them all).
+                link.stream.setReadTimeout(Self.helloTimeout)
                 let hello = try await link.receiveSecureObject(SessionHello.self)
+                link.stream.setReadTimeout(0)
                 DebugLog.log("incoming: \(hello.kind.rawValue) from \(link.remoteName) fp=\(link.remoteFingerprint)")
                 switch hello.kind {
                 case .status:
@@ -175,7 +188,8 @@ final class ControlManager: ObservableObject {
                 var pulse = ActivityPulse()                 // remote input keeps us awake like local use
                 var activity: IOPMAssertionID = 0
                 while true {
-                    let event = try await link.receiveControlEvent()   // auto-detects JSON/binary codec
+                    // Auto-detects JSON/binary codec. Out-of-range values are dropped, not injected.
+                    guard let event = try await link.receiveControlEvent().sanitizedForInjection() else { continue }
                     if let line = stats.record(isMove: event.kind == .mouseMove, at: ControlHost.nowMs() / 1000) {
                         DebugLog.log(line)
                     }
@@ -234,7 +248,7 @@ final class ControlManager: ObservableObject {
         reportedScreen = screen
         DebugLog.log(String(format: "control: screen changed — now %.0f×%.0f pt, %.0f×%.0f mm; telling the controller",
                             screen.width, screen.height, screen.widthMM, screen.heightMM))
-        _ = link.sendSecureObjectSync(ControlReturn(screen: screen))
+        Task.detached { _ = link.sendSecureObjectSync(ControlReturn(screen: screen)) }   // never block the main thread on the socket
     }
 
     // MARK: Status
@@ -257,9 +271,22 @@ final class ControlManager: ObservableObject {
     }
 
     private func requestControlApproval(name: String, fingerprint: String) async -> Bool {
-        await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            pendingControlRequest = ControlApprovalRequest(peerName: name, fingerprint: fingerprint) { ok in
+        // One prompt at a time. A second request used to replace the one on screen, so Allow
+        // trusted whoever asked last (and the first connection hung forever).
+        guard pendingControlRequest == nil else {
+            DebugLog.log("incoming: control request from \(name) declined — another request is waiting for an answer", .warn)
+            return false
+        }
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let request = ControlApprovalRequest(peerName: name, fingerprint: fingerprint) { ok in
                 cont.resume(returning: ok)
+            }
+            pendingControlRequest = request
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(Self.approvalTimeout * 1_000_000_000))
+                guard let self, self.pendingControlRequest === request else { return }
+                DebugLog.log("incoming: control request from \(name) not answered — declined", .warn)
+                self.resolveControlPending(false)
             }
         }
     }
