@@ -34,6 +34,7 @@ enum CryptoService {
     }
 
     private static func loadOrCreateIdentity() -> Curve25519.Signing.PrivateKey {
+        if TestRun.isActive { return Curve25519.Signing.PrivateKey() }
         keychainLoadCount += 1
         switch keychainLoad() {
         case .found(let raw):

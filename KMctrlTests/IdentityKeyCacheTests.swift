@@ -14,4 +14,12 @@ final class IdentityKeyCacheTests: XCTestCase {
         XCTAssertEqual(a.rawRepresentation, b.rawRepresentation)
         XCTAssertEqual(b.rawRepresentation, c.rawRepresentation)
     }
+
+    /// Hosted tests launch the real app. A test build reading the real key raises a login-password
+    /// prompt for every launch, and a crashing test relaunches it, so the prompt keeps coming back.
+    func testATestRunNeverReadsTheRealKey() {
+        _ = CryptoService.identitySigningKey()
+        XCTAssertTrue(TestRun.isActive)
+        XCTAssertEqual(CryptoService.keychainLoadCount, 0)
+    }
 }

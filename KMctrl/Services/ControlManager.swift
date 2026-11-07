@@ -25,8 +25,26 @@ final class ControlApprovalRequest: ObservableObject, Identifiable {
     }
 }
 
+/// Controllers whose session was ended from this Mac. The kill switch has to stay a kill switch:
+/// their automatic reconnects are refused until someone connects from that Mac on purpose.
+struct ControllerKickList {
+    private var kicked: Set<String> = []
+
+    mutating func kick(_ fingerprint: String) { kicked.insert(fingerprint) }
+
+    mutating func allows(_ fingerprint: String, isReconnect: Bool) -> Bool {
+        if isReconnect { return !kicked.contains(fingerprint) }
+        kicked.remove(fingerprint)
+        return true
+    }
+}
+
 @MainActor
 final class ControlManager: ObservableObject {
+    /// A controller that has come back has given up on its old session, even if this Mac hasn't
+    /// noticed yet. Another Mac's session is not its to end.
+    nonisolated static func replacesSession(of current: String?, with new: String) -> Bool { current == new }
+
     let settings: AppSettings
     let receiver = ReceiverServer()
     let discovery = DiscoveryService()
@@ -54,8 +72,10 @@ final class ControlManager: ObservableObject {
 
     /// End the control session from the controlled side (kick the controller off).
     func disconnectControlled() {
+        if let link = controlledLink { kickedControllers.kick(link.remoteFingerprint) }
         controlledLink?.cancel()
     }
+    private var kickedControllers = ControllerKickList()
 
     private let pathMonitor = NWPathMonitor()
     private var pathMonitorStarted = false
@@ -140,10 +160,17 @@ final class ControlManager: ObservableObject {
                             version: SessionHello.currentControlVersion))
                         link.cancel(); return
                     }
+                    let fp = link.remoteFingerprint
+                    guard self.kickedControllers.allows(fp, isReconnect: hello.reconnect == true) else {
+                        DebugLog.log("incoming: refused an automatic reconnect from \(link.remoteName) — its session was ended here", .warn)
+                        try await link.sendSecureObject(ControlAck(
+                            accepted: false, reason: "\(self.settings.deviceName) ended the session. Click Control to connect again.",
+                            version: SessionHello.currentControlVersion))
+                        link.cancel(); return
+                    }
                     // Trust-gate: a trusted peer is accepted silently; an unknown peer needs a
                     // one-time prompt, and accepting trusts it. Never inject input from a
                     // stranger just because the master switch is on.
-                    let fp = link.remoteFingerprint
                     let accepted = self.trust.isTrusted(fp)
                         ? true
                         : await self.requestControlApproval(name: link.remoteName, fingerprint: fp)
@@ -171,8 +198,10 @@ final class ControlManager: ObservableObject {
 
     private func runControlReceive(link: PeerLink, hostVersion: Int) async {
         let name = link.remoteName
+        let replaced = Self.replacesSession(of: controlledLink?.remoteFingerprint, with: link.remoteFingerprint) ? controlledLink : nil
         controlActiveFrom = name
         controlledLink = link
+        replaced?.cancel()      // lets go of anything its dead session left held down
         badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
         clipboard.setActive(true, sessionFingerprint: link.remoteFingerprint)
         DebugLog.log("control: session started from \(name)")

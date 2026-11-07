@@ -14,8 +14,28 @@ final class ControlHost: ObservableObject {
     /// control link must be POSIX. A Network.framework link would connect and then drop on
     /// the first frame.
     nonisolated static let controlTransports: Set<TransportStrategy> = [.posix]
+    /// A control link can't start without the other Mac's address, because the raw socket needs
+    /// it. The lookup ran past 4 s on the work Mac, which failed the connect while a retry worked
+    /// at once, and it took 8.5 s in a test on the home Mac.
+    nonisolated static let connectLookupLimit: TimeInterval = 15
 
     @Published var state: State = .idle
+    /// Trying to get a lost session back. `state` stays `.connecting` throughout, including
+    /// between attempts, so Disconnect stays on screen and ends the retries.
+    @Published private(set) var reconnecting = false
+    private var reconnectAttempt = 0
+    private var sessionLocalName = ""
+    /// Opens a session's link. Tests replace it to run the session code without a network.
+    var dial: @MainActor (Peer, String) async throws -> PeerLink = { peer, localName in
+        try await TransportConnector.shared.connect(to: peer, localName: localName,
+                                                    allowed: ControlHost.controlTransports,
+                                                    lookupLimit: ControlHost.connectLookupLimit)
+    }
+    /// How long to wait before reconnect attempt `attempt` (the first is 1). The link has only
+    /// just gone and most faults are brief, so the first try is at once, then it backs off.
+    nonisolated static func reconnectDelay(attempt: Int) -> TimeInterval {
+        attempt <= 1 ? 0 : min(pow(2, Double(attempt - 2)), 10)
+    }
     @Published var peerName: String?
     /// The peer of the open session (for side channels such as clipboard sync).
     @Published private(set) var currentPeer: Peer?
@@ -216,15 +236,21 @@ final class ControlHost: ObservableObject {
 
     func connect(to peer: Peer, localName: String) {
         guard state == .idle else { return }
+        sessionLocalName = localName
+        open(peer)
+    }
+
+    private func open(_ peer: Peer) {
         state = .connecting; peerName = peer.name; currentPeer = peer; lastError = nil
         connectGeneration &+= 1
         let generation = connectGeneration
+        let localName = sessionLocalName
+        let isReconnect = reconnecting
         Task { [weak self] in
             guard let self else { return }
             var opened: PeerLink?          // closed on any failure below, so it never leaks
             do {
-                let link = try await TransportConnector.shared.connect(to: peer, localName: localName,
-                                                                       allowed: Self.controlTransports)
+                let link = try await self.dial(peer, localName)
                 opened = link
                 guard self.connectGeneration == generation else { link.cancel(); return }   // Disconnect clicked meanwhile
                 // Is this the Mac we paired with under that name? Anything else would receive
@@ -236,17 +262,20 @@ final class ControlHost: ObservableObject {
                 case .mismatch(let expected):
                     link.cancel()
                     self.lastError = "The Mac answering as “\(peer.name)” is not the one you paired with (fingerprint \(link.remoteFingerprint), expected \(expected)). If you reinstalled it, remove it under Settings → Trusted Macs and connect again."
+                    self.stopReconnecting()
                     self.state = .idle
                     DebugLog.log("control host: refused \(peer.name) — fingerprint \(link.remoteFingerprint) does not match the pinned \(expected)", .error)
                     return
                 }
-                try await link.sendSecureObject(SessionHello(kind: .control, version: SessionHello.currentControlVersion))
+                try await link.sendSecureObject(SessionHello(kind: .control, version: SessionHello.currentControlVersion,
+                                                             reconnect: isReconnect ? true : nil))
                 // Wait for the peer to accept before we ever capture / hijack the cursor.
                 let ack = try await link.receiveSecureObject(ControlAck.self)
                 guard self.connectGeneration == generation else { link.cancel(); return }
                 guard ack.accepted else {
                     link.cancel()
                     self.lastError = ack.reason.isEmpty ? "\(peer.name) is not accepting control." : ack.reason
+                    self.stopReconnecting()     // a real answer: asking again would be wrong
                     self.state = .idle
                     DebugLog.log("control host: peer refused — \(self.lastError ?? "")", .warn)
                     return
@@ -274,7 +303,10 @@ final class ControlHost: ObservableObject {
                 guard self.connectGeneration == generation else { link.cancel(); return }
                 self.link = link
                 self.linkBox.link = link
+                let attempts = self.reconnectAttempt
+                self.stopReconnecting()
                 self.state = .connected
+                if isReconnect { DebugLog.log("control host: reconnected to \(peer.name) (attempt \(attempts))") }
                 self.activity = ProcessInfo.processInfo.beginActivity(
                     options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
                     reason: "Forwarding keyboard and mouse to \(peer.name)")
@@ -290,6 +322,11 @@ final class ControlHost: ObservableObject {
             } catch {
                 opened?.cancel()
                 guard self.connectGeneration == generation else { return }   // already disconnected
+                if self.reconnecting {
+                    DebugLog.log("control host: reconnect attempt \(self.reconnectAttempt) failed — \(error.localizedDescription)", .warn)
+                    self.retryConnect(to: peer)
+                    return
+                }
                 self.lastError = error.localizedDescription
                 self.state = .idle
                 DebugLog.log("control host: connect failed — \(error.localizedDescription)", .error)
@@ -312,7 +349,7 @@ final class ControlHost: ObservableObject {
         linkBox.link = nil
         state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil; peerFingerprint = nil
         latency = LatencyStats()
-        if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
+        stopReconnecting()
         health.stop()
         if wasCapturing, let old {
             // Let the queued releaseAll go out and give the peer a moment to hand its
@@ -323,6 +360,45 @@ final class ControlHost: ObservableObject {
         }
     }
 
+    /// A session has ended. A lost link comes back by itself; one the other Mac closed stays
+    /// closed. A stale reader or a write already queued on an old link must not touch a newer
+    /// session or the retries, so nothing happens unless `link` is still the current one.
+    /// Capture isn't resumed afterwards: the keyboard stays on this Mac until you switch again.
+    private func linkEnded(_ link: PeerLink, lost: Bool) {
+        guard self.link === link, state != .idle else { return }
+        guard lost, let peer = currentPeer else { disconnect(); return }
+        DebugLog.log("control host: lost the link to \(peer.name) — reconnecting", .warn)
+        disconnect()                 // gives the pointer back now, not after the retries
+        reconnecting = true
+        // KMctrl is usually in the background by now, where App Nap would delay the retries.
+        activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                         reason: "Reconnecting to \(peer.name)")
+        state = .connecting; peerName = peer.name; currentPeer = peer
+        retryConnect(to: peer)
+    }
+
+    private func retryConnect(to peer: Peer) {
+        reconnectAttempt += 1
+        let generation = connectGeneration
+        let delay = Self.reconnectDelay(attempt: reconnectAttempt)
+        DebugLog.log("control host: reconnect attempt \(reconnectAttempt) in \(Int(delay)) s")
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, self.connectGeneration == generation else { return }   // Disconnect clicked
+            self.open(peer)
+        }
+    }
+
+    private func stopReconnecting() {
+        reconnecting = false
+        reconnectAttempt = 0
+        if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
+    }
+
+    /// A write to `link` failed, so the socket is dead. Often the first sign, since control sends
+    /// all the time. The other Mac closing on purpose reaches the reader before any write fails.
+    func sendFailed(on link: PeerLink) { linkEnded(link, lost: true) }
+
     /// Send a discrete event (click/key/releaseAll) on the flush queue, flushing any
     /// pending mouse move first so it stays correctly positioned. Synchronous write — no
     /// async send-task that would batch frames and clump them on the wire.
@@ -332,8 +408,8 @@ final class ControlHost: ObservableObject {
             guard let link = box.link else { return }
             if let move = buf.takeEvent() { _ = link.sendControlEventSync(move) }
             if !link.sendControlEventSync(event) {
-                DebugLog.log("control host: send of \(event.kind.rawValue) failed — disconnecting", .error)
-                Task { @MainActor in self?.disconnect() }
+                DebugLog.log("control host: send of \(event.kind.rawValue) failed", .error)
+                Task { @MainActor in self?.sendFailed(on: link) }
             }
         }
     }
@@ -399,6 +475,7 @@ final class ControlHost: ObservableObject {
     /// control back to this Mac.
     private func startReturnReader(link: PeerLink) {
         Task { [weak self] in
+            var lost = false
             while true {
                 let r: ControlReturn
                 do {
@@ -408,6 +485,7 @@ final class ControlHost: ObservableObject {
                     continue                                              // link is fine, frame wasn't
                 } catch {
                     DebugLog.log("control host: return reader ended — \(error.localizedDescription)", .warn)
+                    if case LinkError.lost = error { lost = true }
                     break
                 }
                 if let sent = r.pong {
@@ -440,8 +518,8 @@ final class ControlHost: ObservableObject {
             }
             // The peer is gone: release capture and the cursor now, don't wait for the next
             // mouse move to discover the dead socket.
-            // Only if it is still this link's session: a stale reader must not end a newer one.
-            await MainActor.run { if let self, self.link === link, self.state != .idle { self.disconnect() } }
+            let wasLost = lost
+            await MainActor.run { self?.linkEnded(link, lost: wasLost) }
         }
     }
 
@@ -747,16 +825,16 @@ final class ControlHost: ObservableObject {
                 if link.sendControlEventSync(move) {
                     sent += 1
                 } else {
-                    DebugLog.log("control host: send of mouseMove failed — disconnecting", .error)
-                    Task { @MainActor in self?.disconnect() }
+                    DebugLog.log("control host: send of mouseMove failed", .error)
+                    Task { @MainActor in self?.sendFailed(on: link) }
                 }
             }
             let now = DispatchTime.now()
             // Latency probe: ~5×/sec, host stamps its own clock; client bounces it back.
             if probes, now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
                 if !link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs())) {
-                    DebugLog.log("control host: send of ping failed — disconnecting", .error)
-                    Task { @MainActor in self?.disconnect() }
+                    DebugLog.log("control host: send of ping failed", .error)
+                    Task { @MainActor in self?.sendFailed(on: link) }
                 }
                 lastPing = now
             }

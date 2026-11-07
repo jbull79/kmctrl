@@ -125,7 +125,9 @@ struct ContentView: View {
     private var hostStatusText: String {
         switch host.state {
         case .idle: return ""
-        case .connecting: return "Connecting to \(host.peerName ?? "")…"
+        case .connecting:
+            return host.reconnecting ? "Connection lost — reconnecting to \(host.peerName ?? "")…"
+                                     : "Connecting to \(host.peerName ?? "")…"
         case .connected: return "Connected to \(host.peerName ?? "")"
         case .capturing: return "Controlling \(host.peerName ?? "")"
         }

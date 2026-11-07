@@ -77,15 +77,18 @@ final class AppModel: ObservableObject {
     /// Once per launch. It runs from the main window's onAppear, which fires again for every
     /// window opened later — each extra run leaked an update timer and rebound the listener.
     func start() {
-        guard !started else { return }
+        // SO_NOSIGPIPE can't be set on a socket that was reset the moment it connected, so this
+        // is what stops a send on one from killing the app without a crash report.
+        signal(SIGPIPE, SIG_IGN)
+        guard !started, !TestRun.isActive else { return }
         started = true
         _ = HealthMonitor.appStarted
-        signal(SIGPIPE, SIG_IGN)   // belt and braces for SO_NOSIGPIPE: never die on a closed peer
         // Load the identity key now, off the main thread. A Keychain read blocks its caller
         // until any password prompt is answered; doing it lazily on the main thread during a
         // session froze the app with the pointer hidden (0.8.0–0.8.6). After this it is cached.
         Task.detached(priority: .userInitiated) { _ = CryptoService.identitySigningKey() }
         LocalNetwork.startTrackingInterfaceOrder()   // follow macOS's interface ranking from launch
+        SystemEventLog.shared.start()   // sleep, wake and network changes, for Diagnostics
         manager.startServices()
         applyActivationPolicy()
         if settings.keepAwakeEnabled { keepAwake.start() }

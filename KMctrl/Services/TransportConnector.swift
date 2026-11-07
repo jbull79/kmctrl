@@ -35,6 +35,8 @@ final class TransportConnector {
 
     private var winner: [String: TransportStrategy] = [:]
     private let connectTimeout: TimeInterval = 6
+    /// Opens the raw socket. Tests replace it to see which thread it runs on.
+    var openSocket: @Sendable (String, UInt16, TimeInterval) throws -> POSIXByteStream = POSIXByteStream.connect
 
     /// Strategies to try, in order: the allowed ones, last-known-good first if it is allowed.
     /// A cached winner outside `allowed` is ignored, so callers that need a specific transport
@@ -52,9 +54,18 @@ final class TransportConnector {
 
     /// Connect + handshake to `peer`, returning a ready, authenticated link. `allowed`
     /// restricts which transport methods may be tried (user-toggleable for testing).
+    /// `lookupLimit` is how long to wait for the peer's address before going without it.
     func connect(to peer: Peer, localName: String,
-                 allowed: Set<TransportStrategy> = Set(TransportStrategy.allCases)) async throws -> PeerLink {
-        let resolved = await resolveHostPort(peer.endpoint)
+                 allowed: Set<TransportStrategy> = Set(TransportStrategy.allCases),
+                 lookupLimit: TimeInterval = 4) async throws -> PeerLink {
+        let lookupStart = Date()
+        let resolved = await resolveHostPort(peer.endpoint, limit: lookupLimit)
+        let lookupMs = Int(Date().timeIntervalSince(lookupStart) * 1000)
+        if let resolved {
+            DebugLog.log("connect: found \(peer.name) at \(resolved.host):\(resolved.port) in \(lookupMs) ms")
+        } else {
+            DebugLog.log("connect: no address for \(peer.name) after \(lookupMs) ms", .warn)
+        }
         let key = resolved.map { "\($0.host):\($0.port)" } ?? peer.id
 
         let order = Self.attemptOrder(allowed: allowed, preferred: winner[key])
@@ -75,7 +86,7 @@ final class TransportConnector {
                 DebugLog.log("connect: '\(strategy.label)' failed for \(key) — \(error.localizedDescription)", .warn)
             }
         }
-        throw lastError ?? LinkError.closed
+        throw lastError ?? (resolved == nil ? LinkError.addressNotFound(peer.name) : LinkError.closed)
     }
 
     /// Forget a cached choice (e.g. after a network change) so probing restarts fresh.
@@ -95,7 +106,11 @@ final class TransportConnector {
         switch strategy {
         case .posix:
             guard let r = resolved else { throw LinkError.closed }
-            stream = try POSIXByteStream.connect(host: r.host, port: r.port, timeout: connectTimeout)
+            // Off the main thread: a Mac that doesn't answer holds this for the whole timeout,
+            // and reconnecting repeats it, with Disconnect the only way out.
+            let timeout = connectTimeout
+            let open = openSocket
+            stream = try await Task.detached(priority: .userInitiated) { try open(r.host, r.port, timeout) }.value
         case .nwProhibitOther:
             let params = NWParameters.tcp
             params.prohibitedInterfaceTypes = [.other]
@@ -123,7 +138,7 @@ final class TransportConnector {
     /// Manual endpoints already carry host:port; Bonjour `.service` endpoints are resolved
     /// with a short-lived NWConnection (Network.framework's discovery works fine even when
     /// its data path doesn't), reading the peer's address from the established path.
-    private func resolveHostPort(_ endpoint: NWEndpoint) async -> (host: String, port: UInt16)? {
+    private func resolveHostPort(_ endpoint: NWEndpoint, limit: TimeInterval = 4) async -> (host: String, port: UInt16)? {
         if case let .hostPort(host, port) = endpoint {
             return (hostString(host), port.rawValue)
         }
@@ -141,12 +156,14 @@ final class TransportConnector {
                     if done.fire() { conn.cancel(); cont.resume(returning: result) }
                 case .failed, .cancelled:
                     if done.fire() { conn.cancel(); cont.resume(returning: nil) }
+                case .waiting(let error):
+                    DebugLog.log("connect: address lookup waiting — \(error)", .warn)
                 default: break
                 }
             }
             conn.start(queue: .global(qos: .userInitiated))
             // Safety timeout so resolution can't hang the connect.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 4) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + limit) {
                 if done.fire() { conn.cancel(); cont.resume(returning: nil) }
             }
         }

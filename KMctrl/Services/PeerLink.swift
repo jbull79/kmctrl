@@ -4,15 +4,19 @@ import CryptoKit
 
 enum LinkError: Error, LocalizedError {
     case closed
+    case lost
     case notReady
     case rejected
     case integrityMismatch(String)
     case malformed
     case authenticationFailed
+    case addressNotFound(String)
 
     var errorDescription: String? {
         switch self {
+        case .addressNotFound(let name): return "Couldn’t find “\(name)” on the network. Check that KMctrl is running on it, then try again."
         case .closed: return "Connection closed."
+        case .lost: return "Connection lost."
         case .notReady: return "Connection not ready."
         case .rejected: return "The other device declined the transfer."
         case .integrityMismatch(let name): return "Integrity check failed for \(name)."

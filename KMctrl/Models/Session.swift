@@ -29,6 +29,9 @@ struct ClipboardPayload: Codable {
 struct SessionHello: Codable {
     var kind: SessionKind
     var version: Int = 1
+    /// True when the controller is reconnecting by itself after losing the link, not because
+    /// someone clicked Control. Absent from older peers, which read as a deliberate connect.
+    var reconnect: Bool? = nil
 
     /// Control-stream protocol version this build speaks. v2 (0.8.0) adds typed characters on
     /// key downs (`ControlEvent.chars`), `.mediaKey` and `.wakeDisplay`; v3 (0.8.13) adds the

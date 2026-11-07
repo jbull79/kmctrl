@@ -197,10 +197,22 @@ final class POSIXByteStream: ByteStream, @unchecked Sendable {
                 let want = Swift.min(max, kMaxReadChunk)
                 var tmp = [UInt8](repeating: 0, count: want)
                 let n = tmp.withUnsafeMutableBytes { Darwin.recv(fd, $0.baseAddress, want, 0) }
-                if n > 0 { cont.resume(returning: Data(tmp[0..<n])) }
-                else { cont.resume(throwing: LinkError.closed) }
+                let error = errno
+                if n > 0 { cont.resume(returning: Data(tmp[0..<n])); return }
+                // An error means the connection failed; 0 means the other Mac ended it. Control
+                // sessions reconnect after the first but not the second. Our own close() is
+                // neither, and isn't worth logging.
+                let closedHere = self.closed
+                if !closedHere { DebugLog.log(Self.endReason(received: n, error: error), n == 0 ? .info : .warn) }
+                cont.resume(throwing: n < 0 && !closedHere ? LinkError.lost : LinkError.closed)
             }
         }
+    }
+
+    /// Why `recv` ended a link: the other Mac closed it (0), or the connection was lost.
+    static func endReason(received n: Int, error: Int32) -> String {
+        n == 0 ? "link: the other Mac closed the connection"
+               : "link: connection lost — \(String(cString: strerror(error))) (errno \(error))"
     }
 
     func close() {
