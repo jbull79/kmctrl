@@ -26,6 +26,29 @@ final class LiveScreenProtocolTests: XCTestCase {
         XCTAssertEqual(back.setup?.returnArea, laptop)
     }
 
+    func testV5SetupCarriesEveryWayBackAndTheArrangement() throws {
+        var setup = ControlSetup(hostEdge: .top, autoReturn: true, returnArea: laptop, returnSpan: [0, 1512])
+        setup.returnZones = Desk.layout().returnZones
+        setup.arrangement = Desk.layout().snapshot()
+        let back = try JSONDecoder().decode(ControlSetup.self, from: JSONEncoder().encode(setup))
+        XCTAssertEqual(back.returnZones, setup.returnZones)
+        XCTAssertEqual(back.arrangement, setup.arrangement)
+    }
+
+    func testV4SetupWithoutZonesStillDecodes() throws {
+        let json = Data(#"{"hostEdge":"top","autoReturn":true,"returnSpan":[0,10]}"#.utf8)
+        let setup = try JSONDecoder().decode(ControlSetup.self, from: json)
+        XCTAssertNil(setup.returnZones)
+        XCTAssertNil(setup.arrangement)
+    }
+
+    func testAReturnNamesItsZoneAndIsStillAReturn() throws {
+        let r = ControlReturn(at: [2559, 700], zone: 1)
+        XCTAssertTrue(r.isReturnSignal)
+        XCTAssertEqual(try JSONDecoder().decode(ControlReturn.self, from: JSONEncoder().encode(r)).zone, 1)
+        XCTAssertNil(try JSONDecoder().decode(ControlReturn.self, from: Data(#"{"ok":true,"at":[1,2]}"#.utf8)).zone)
+    }
+
     func testOlderAckWithoutAScreenStillDecodes() throws {
         let json = Data(#"{"accepted":true,"version":3}"#.utf8)
         XCTAssertNil(try JSONDecoder().decode(ControlAck.self, from: json).screen)

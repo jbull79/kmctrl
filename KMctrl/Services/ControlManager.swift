@@ -211,8 +211,10 @@ final class ControlManager: ObservableObject {
             injector.start()
             defer { injector.stop() }
             do {
-                injector.configureReturn(try await link.receiveSecureObject(ControlSetup.self))
-                injector.onReturn = { at in _ = link.sendSecureObjectSync(ControlReturn(at: [at.x, at.y])) }
+                let setup = try await link.receiveSecureObject(ControlSetup.self)
+                injector.configureReturn(setup)
+                await self.keepArrangement(setup.arrangement, from: name)
+                injector.onReturn = { at, zone in _ = link.sendSecureObjectSync(ControlReturn(at: [at.x, at.y], zone: zone)) }
                 var stats = ReceiveStats()
                 var pulse = ActivityPulse()                 // remote input keeps us awake like local use
                 var activity: IOPMAssertionID = 0
@@ -229,7 +231,10 @@ final class ControlManager: ObservableObject {
                     if event.kind == .hostStats { continue }
                     if event.kind == .wakeDisplay { DisplayWake.wake(); continue }
                     if event.kind == .edgeSetup {           // the controller re-laid the screens out
-                        if let setup = event.setup { injector.configureReturn(setup) }
+                        if let setup = event.setup {
+                            injector.configureReturn(setup)
+                            await self.keepArrangement(setup.arrangement, from: name)
+                        }
                         continue
                     }
                     if event.kind == .clipboard {
@@ -264,6 +269,17 @@ final class ControlManager: ObservableObject {
         }
         link.cancel()
         DebugLog.log("control: session ended (\(name))")
+    }
+
+    /// The controller's monitor arrangement (v5), kept to show in Settings. Ignored when it
+    /// can't be real.
+    private func keepArrangement(_ raw: ArrangementSnapshot?, from name: String) {
+        guard let raw else { return }
+        guard let a = raw.sanitized else {
+            DebugLog.log("control: ignoring an impossible monitor arrangement from \(name)", .warn); return
+        }
+        if settings.controllerArrangement != a { settings.controllerArrangement = a }
+        if settings.controllerArrangementFrom != name { settings.controllerArrangementFrom = name }
     }
 
     /// Monitors changed while being controlled: keep the cursor inside the new desktop, and tell

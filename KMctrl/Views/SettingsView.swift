@@ -157,18 +157,26 @@ struct SettingsView: View {
                 Text("When on, another trusted Mac can control this one (you confirm the first time). The badge sits bottom-right; the menu bar always shows who is controlling with a Disconnect button.")
             }
 
+            if let arrangement = settings.controllerArrangement {
+                Section {
+                    ControllerArrangementView(arrangement: arrangement)
+                } header: {
+                    Text("Arrangement on \(settings.controllerArrangementFrom ?? "the controlling Mac")")
+                } footer: {
+                    Text("Where this Mac sits among the controlling Mac's screens, as it last sent it. The highlighted edges lead here. Change it in KMctrl's Settings on that Mac.")
+                }
+            }
+
             TrustedMacsSection(trust: manager.trust)
 
             Section {
                 Toggle("Use edge mode to drive another Mac", isOn: $settings.useEdgeMode)
                 ScreenArrangementView(edge: $settings.controlEdge, displayID: $settings.handoffDisplayID,
                                       offsetMM: $settings.handoffOffsetMM, remote: settings.remoteScreen)
-                Text("Bump the **\(settings.controlEdge.label.lowercased())** edge of the highlighted screen to take control; ⌃⌥⌘ releases.")
-                    .font(.caption).foregroundStyle(.secondary)
             } header: {
                 Text("Edge hand-off arrangement")
             } footer: {
-                Text("Drag the other Mac next to the monitor it physically sits beside, then slide it along that edge to where it really is — screens are drawn to physical size. Only the stretch of edge it touches hands off, and the pointer crosses at the matching place. Edge mode needs Accessibility + Input Monitoring (below); window mode (click-to-capture) needs neither.")
+                Text("Drag the other Mac next to the monitor it physically sits beside — or onto the seam between two monitors it sits between — then slide it along that edge to where it really is. The other Mac is drawn to physical size. Every monitor edge next to it hands off, and the pointer crosses at the matching place. Edge mode needs Accessibility + Input Monitoring (below); window mode (click-to-capture) needs neither.")
             }
 
             Section {

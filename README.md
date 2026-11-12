@@ -10,7 +10,7 @@ other machine without admin rights.
 
 ## Download
 
-**[⬇ KMctrl 0.8.22 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.8.22/KMctrl-0.8.22.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
+**[⬇ KMctrl 0.8.23 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.8.23/KMctrl-0.8.23.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
 
 Unsigned, ad-hoc, **Apple Silicon only** (won't run on Intel). macOS quarantines
 downloaded unsigned apps — clear it (no admin needed on your own files):
@@ -48,6 +48,11 @@ If it still won't open, your MDM enforces Gatekeeper — build locally in Xcode 
 - **Wake screen** — the remote display is woken when you start controlling, or on demand.
 - **Update check** — once a day against GitHub releases (toggle in Settings → General).
 - **Swipe-safe capture** — a Magic Mouse / trackpad system swipe no longer drops control.
+- **Every edge next to the other Mac hands off** — not just the one you dropped it on. With the
+  other Mac's screen above one monitor and beside another, both edges switch, and coming back
+  through either side lands on the matching monitor. Dropped on the seam between two monitors, it
+  sits *between* them: crossing the seam switches. The controlled Mac is sent the arrangement and
+  shows it in Settings.
 - **Auto-reconnect** — a lost link comes back by itself, until you click Disconnect. Ending the
   session from the controlled Mac stays ended.
 

@@ -38,6 +38,14 @@ final class AppSettings: ObservableObject {
     @Published var remoteScreen: ScreenGeometry? {
         didSet { defaults.set(remoteScreen.flatMap { try? JSONEncoder().encode($0) }, forKey: Keys.remoteScreen) }
     }
+    /// Controlled Mac: the last controller's monitor arrangement and where this Mac sits in it
+    /// (protocol v5), shown read-only in Settings, and that controller's name.
+    @Published var controllerArrangement: ArrangementSnapshot? {
+        didSet { defaults.set(controllerArrangement.flatMap { try? JSONEncoder().encode($0) }, forKey: Keys.controllerArrangement) }
+    }
+    @Published var controllerArrangementFrom: String? {
+        didSet { defaults.set(controllerArrangementFrom, forKey: Keys.controllerArrangementFrom) }
+    }
     /// EXPERIMENTAL: encode forwarded control events as fixed binary instead of JSON on the
     /// controlling Mac (kills per-event JSONEncoder/Decoder cost). Self-describing on the
     /// wire — the controlled Mac auto-detects, so only the controller's flag matters.
@@ -85,6 +93,8 @@ final class AppSettings: ObservableObject {
         static let returnAtEdge = "kmctrl.returnAtEdge"
         static let handoffOffset = "kmctrl.handoffOffsetMM"
         static let remoteScreen = "kmctrl.remoteScreen"
+        static let controllerArrangement = "kmctrl.controllerArrangement"
+        static let controllerArrangementFrom = "kmctrl.controllerArrangementFrom"
         static let binaryControl = "kmctrl.binaryControl"
         static let flushInterval = "kmctrl.flushIntervalMs"
         static let mouseSensitivity = "kmctrl.mouseSensitivity"
@@ -125,6 +135,9 @@ final class AppSettings: ObservableObject {
         remoteScreen = defaults.data(forKey: Keys.remoteScreen)
             .flatMap { try? JSONDecoder().decode(ScreenGeometry.self, from: $0) }
             .flatMap { $0.isPlausible ? $0 : nil }   // a bad saved value used to crash Settings
+        controllerArrangement = defaults.data(forKey: Keys.controllerArrangement)
+            .flatMap { try? JSONDecoder().decode(ArrangementSnapshot.self, from: $0) }?.sanitized
+        controllerArrangementFrom = defaults.string(forKey: Keys.controllerArrangementFrom).map(PeerName.sanitize)
         binaryControl = defaults.bool(forKey: Keys.binaryControl)
         flushIntervalMs = AppSettings.clampedFlushInterval(defaults.integer(forKey: Keys.flushInterval))
         mouseSensitivity = AppSettings.clampedMouseSensitivity(defaults.double(forKey: Keys.mouseSensitivity))

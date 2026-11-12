@@ -18,13 +18,12 @@ final class ControlInjector: @unchecked Sendable {
     private var heldButtons: Set<Int> = []   // every button held, so releaseAll lets go of all of them
     private let source = CGEventSource(stateID: .hidSystemState)
 
-    /// When the injected cursor reaches this edge, control should return to the host.
-    private var returnEdge: ScreenEdge?
-    var onReturn: ((CGPoint) -> Void)?          // with where the pointer left
-    /// v4: the display and stretch of its edge that face the controller (nil = whole desktop).
+    /// Where a deliberate push hands control back to the host (nil = never: window mode).
+    private var returnWatch: ReturnWatch?
+    /// With where the pointer left and, for a v5 controller, which way back it took.
+    var onReturn: ((CGPoint, Int?) -> Void)?
+    /// v4: the display whose edges face the controller (nil = whole desktop).
     private var returnArea: CGRect?
-    private var returnSpan: ClosedRange<Double>?
-    private var returnTrigger = EdgeReturnTrigger()
 
     // Pacing
     private let lock = NSLock()
@@ -64,14 +63,11 @@ final class ControlInjector: @unchecked Sendable {
     /// Arm (or re-arm) the return edge from the controller's setup — at session start, and again
     /// when either Mac's monitors change. The inject timer reads these, hence the lock.
     func configureReturn(_ setup: ControlSetup) {
-        let span = setup.returnSpan.flatMap {
-            $0.count == 2 && $0.allSatisfy(\.isFinite) && $0[0] <= $0[1] ? $0[0]...$0[1] : nil
-        }
+        let watch = ReturnWatch(setup: setup)
         let area = setup.returnArea.flatMap { $0.isPlausible ? $0.rect : nil }
         lock.lock()
-        returnEdge = setup.autoReturn ? setup.hostEdge.opposite : nil
+        returnWatch = watch
         returnArea = area
-        returnSpan = span
         lock.unlock()
     }
 
@@ -169,18 +165,18 @@ final class ControlInjector: @unchecked Sendable {
 
     private func moveBy(_ dx: Double, _ dy: Double) {
         lock.lock()
-        let bounds = self.bounds, returnEdge = self.returnEdge, returnArea = self.returnArea, returnSpan = self.returnSpan
+        let bounds = self.bounds
         lock.unlock()
         let intended = CGPoint(x: cursor.x + dx, y: cursor.y + dy)
         cursor.x = min(max(bounds.minX, intended.x), bounds.maxX - 1)
         cursor.y = min(max(bounds.minY, intended.y), bounds.maxY - 1)
         postMouse(mouseDown ? .leftMouseDragged : .mouseMoved, button: .left)
-        // Return control after a deliberate push past the return edge, never mid-drag.
-        if let e = returnEdge, returnTrigger.shouldReturn(cursor: cursor, intended: intended,
-                                                          bounds: returnArea ?? bounds, edge: e,
-                                                          buttonHeld: mouseDown, span: returnSpan) {
-            onReturn?(cursor)
-        }
+        // Return control after a deliberate push past a way back, never mid-drag.
+        lock.lock()
+        let zone = returnWatch?.check(cursor: cursor, intended: intended, bounds: returnArea ?? bounds, buttonHeld: mouseDown)
+        let reports = returnWatch?.reportsZone == true
+        lock.unlock()
+        if let zone { onReturn?(cursor, reports ? zone : nil) }
     }
 
     // MARK: CGEvent helpers

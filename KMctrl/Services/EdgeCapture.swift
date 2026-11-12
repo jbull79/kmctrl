@@ -3,7 +3,8 @@ import CoreGraphics
 
 /// Edge-bump capture for KVM, using a global CGEventTap. Requires Accessibility + Input
 /// Monitoring (grantable on non-managed Macs). While idle it passes events through and
-/// watches for the cursor reaching the right edge of the main display → begins capture.
+/// watches for the cursor reaching (or crossing) any edge stretch that leads to the other
+/// Mac → begins capture.
 /// While capturing it forwards and consumes events; ⌃⌥⌘ releases control.
 ///
 /// Forwarding goes through caller-supplied closures (which feed the same coalesce buffer
@@ -11,9 +12,11 @@ import CoreGraphics
 final class EdgeCapture: @unchecked Sendable {
     private var tap: CFMachPort?
     private var runLoop: CFRunLoop?
-    /// The display whose edge hands off (or the whole-desktop union when 0). Multi-monitor:
-    /// the bump fires only on this display's chosen edge, within that display's extent.
-    private let bounds: CGRect
+    /// Every stretch of monitor edge that leads to the other Mac.
+    private let portals: [HandoffPortal]
+    /// Tap thread only: no dwell — a bump switches at once.
+    private var watch = PortalWatch(dwell: 0)
+    private var tapSawCapture = false
     private let lock = NSLock()
     private var capturing = false
 
@@ -36,34 +39,21 @@ final class EdgeCapture: @unchecked Sendable {
         return ids.contains(id) ? CGDisplayBounds(id) : desktopBounds()
     }
 
-    private let edge: ScreenEdge
     private let forwardMove: @Sendable (Double, Double, UInt64) -> Void
     private let forwardDiscrete: @Sendable (ControlEvent) -> Void
-    private let onBegin: @Sendable () -> Void
+    private let onBegin: @Sendable (PortalHit) -> Void
     private let onEnd: @Sendable () -> Void
 
-    init(edge: ScreenEdge,
-         displayID: UInt32 = 0,
+    init(portals: [HandoffPortal],
          forwardMove: @escaping @Sendable (Double, Double, UInt64) -> Void,
          forwardDiscrete: @escaping @Sendable (ControlEvent) -> Void,
-         onBegin: @escaping @Sendable () -> Void,
+         onBegin: @escaping @Sendable (PortalHit) -> Void,
          onEnd: @escaping @Sendable () -> Void) {
-        self.bounds = EdgeCapture.bounds(forDisplay: displayID)
-        self.edge = edge
+        self.portals = portals
         self.forwardMove = forwardMove
         self.forwardDiscrete = forwardDiscrete
         self.onBegin = onBegin
         self.onEnd = onEnd
-    }
-
-    private func atEdge(_ p: CGPoint) -> Bool {
-        let b = bounds
-        switch edge {                                   // constrain the perpendicular axis to
-        case .right:  return p.x >= b.maxX - 2 && p.y >= b.minY && p.y <= b.maxY   // this display's
-        case .left:   return p.x <= b.minX + 1 && p.y >= b.minY && p.y <= b.maxY   // extent, so the
-        case .top:    return p.y <= b.minY + 1 && p.x >= b.minX && p.x <= b.maxX   // bump fires only
-        case .bottom: return p.y >= b.maxY - 2 && p.x >= b.minX && p.x <= b.maxX   // on that monitor
-        }
     }
 
     /// Create + start the tap on its own run-loop thread. Returns false if the tap can't
@@ -117,13 +107,18 @@ final class EdgeCapture: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
         if !isCapturing {
-            if atEdge(event.location) {                   // hit the hand-off edge → take control
+            if tapSawCapture { watch.forget(); tapSawCapture = false }   // back from the other Mac
+            let held = type == .leftMouseDragged || type == .rightMouseDragged || type == .otherMouseDragged
+            if let hit = watch.update(point: event.location, buttonsHeld: held, portals: portals,
+                                      now: ProcessInfo.processInfo.systemUptime) {   // went across → take control
                 setCapturing(true)
-                onBegin()
+                tapSawCapture = true
+                onBegin(hit)
                 return nil
             }
-            return Unmanaged.passUnretained(event)        // not at edge → leave host alone
+            return Unmanaged.passUnretained(event)        // not at an edge → leave host alone
         }
+        tapSawCapture = true
         // Capturing: ⌃⌥⌘ releases.
         if type == .flagsChanged {
             let f = event.flags

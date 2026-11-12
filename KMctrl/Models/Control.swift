@@ -71,6 +71,20 @@ struct ControlSetup: Codable {
     /// there. Absent → the whole desktop edge, as before.
     var returnArea: ScreenGeometry? = nil
     var returnSpan: [Double]? = nil
+    /// v5: every way back — one zone per stretch of the controller's monitor edges that leads to
+    /// the controlled Mac. Absent (older controller) → the single `hostEdge`/`returnSpan` above,
+    /// which a v5 controller still fills from its anchor edge for older controlled Macs.
+    var returnZones: [ReturnZone]? = nil
+    /// v5: the controller's monitors and where the controlled Mac sits among them, shown
+    /// read-only on the controlled Mac. Sanitised before use.
+    var arrangement: ArrangementSnapshot? = nil
+}
+
+/// v5: one way back to the controller — a side of the controlled Mac's screen and the stretch
+/// along it (its points) that faces one of the controller's monitors.
+struct ReturnZone: Codable, Equatable {
+    var edge: ScreenEdge
+    var span: [Double]
 }
 
 /// Sent client→host when the client's cursor hits its return edge → host takes back.
@@ -87,10 +101,13 @@ struct ControlReturn: Codable {
     var at: [Double]? = nil
     /// v4: the controlled Mac's screen, re-sent when its monitors change (never a return).
     var screen: ScreenGeometry? = nil
+    /// v5: which of the setup's `returnZones` the pointer pushed through on a return, so the
+    /// controller lands on the matching monitor. Absent → the anchor edge.
+    var zone: Int? = nil
 
     init(ok: Bool = true, pong: Double? = nil, clipboard: ClipboardPayload? = nil, at: [Double]? = nil,
-         screen: ScreenGeometry? = nil) {
-        self.ok = ok; self.pong = pong; self.clipboard = clipboard; self.at = at; self.screen = screen
+         screen: ScreenGeometry? = nil, zone: Int? = nil) {
+        self.ok = ok; self.pong = pong; self.clipboard = clipboard; self.at = at; self.screen = screen; self.zone = zone
     }
     /// A frame with a payload is not a return-of-control signal.
     var isReturnSignal: Bool { pong == nil && clipboard == nil && screen == nil }

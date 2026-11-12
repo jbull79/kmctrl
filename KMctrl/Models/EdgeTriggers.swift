@@ -18,24 +18,123 @@ enum EdgeGeometry {
     }
 }
 
-/// Controlling Mac: has the pointer *rested* on the hand-off edge of the chosen display? Fed by
-/// polling the pointer position, which needs neither Accessibility nor Input Monitoring (unlike
-/// edge mode's event tap). Fires once, then waits for the pointer to leave the edge.
-struct EdgeDwell {
-    static let dwell: TimeInterval = 0.2
-    private var since: TimeInterval?
+/// Where the pointer crossed to the other Mac: which portal, and the position along its edge.
+struct PortalHit: Equatable {
+    var portal: Int
+    var along: Double
+}
+
+/// Controlling Mac: should the pointer go to the other Mac? Fed by polling the pointer position,
+/// which needs neither Accessibility nor Input Monitoring (unlike edge mode's event tap), or by
+/// the tap itself with no dwell.
+///
+/// - On an outer edge the pointer stops, so it has to *rest* on a portal's stretch for `dwell`.
+///   That fires once, then waits for the pointer to leave the edge.
+/// - On a seam between two monitors the pointer doesn't stop, so *crossing* a portal's stretch
+///   into the next monitor fires at once, at the place it crossed.
+/// - Never while a mouse button is held: dragging a window to an edge or across a seam stays here.
+struct PortalWatch {
+    static let defaultDwell: TimeInterval = 0.2
+    let dwell: TimeInterval
+    private var previous: CGPoint?
+    private var restingOn: Int?
+    private var restingSince: TimeInterval = 0
     private var armed = true
 
-    /// `span` limits it to the stretch of the edge the other Mac's screen touches.
-    mutating func update(point: CGPoint, display: CGRect, edge: ScreenEdge,
-                         span: ClosedRange<Double>? = nil, now: TimeInterval) -> Bool {
-        guard EdgeGeometry.isOnEdge(point, of: display, edge: edge, span: span) else { since = nil; armed = true; return false }
-        guard armed else { return false }
-        let start = since ?? now
-        since = start
-        guard now - start >= Self.dwell else { return false }
-        armed = false; since = nil
-        return true
+    init(dwell: TimeInterval = PortalWatch.defaultDwell) { self.dwell = dwell }
+
+    /// Drop the last position — after a session the pointer is warped back, and the point from
+    /// before must not read as a crossing.
+    mutating func forget() { previous = nil; restingOn = nil; armed = true }
+
+    mutating func update(point p: CGPoint, buttonsHeld: Bool, portals: [HandoffPortal], now: TimeInterval) -> PortalHit? {
+        let prev = previous
+        previous = p
+        guard !buttonsHeld else { restingOn = nil; return nil }
+        if let prev, let hit = Self.crossing(from: prev, to: p, portals: portals) {
+            restingOn = nil; armed = false
+            return hit
+        }
+        guard let i = portals.firstIndex(where: { EdgeGeometry.isOnEdge(p, of: $0.display, edge: $0.edge, span: $0.span) }) else {
+            restingOn = nil; armed = true
+            return nil
+        }
+        guard armed else { return nil }
+        if restingOn != i { restingOn = i; restingSince = now }
+        guard now - restingSince >= dwell else { return nil }
+        armed = false; restingOn = nil
+        return PortalHit(portal: i, along: HandoffLayout.alongIsX(portals[i].edge) ? p.x : p.y)
+    }
+
+    /// The pointer moved from `a`, inside a portal's monitor, past that portal's edge to `b`:
+    /// where along the edge it crossed, if that is on the portal's stretch.
+    static func crossing(from a: CGPoint, to b: CGPoint, portals: [HandoffPortal]) -> PortalHit? {
+        for (i, p) in portals.enumerated() {
+            let d = p.display
+            guard d.contains(a), !d.contains(b) else { continue }
+            let alongX = HandoffLayout.alongIsX(p.edge)
+            let from = alongX ? a.y : a.x, to = alongX ? b.y : b.x
+            let line = HandoffLayout.line(d, p.edge)
+            let beyond: Bool
+            switch p.edge {
+            case .right, .bottom: beyond = to >= line
+            case .left, .top:     beyond = to < line
+            }
+            guard beyond, to != from else { continue }
+            let t = min(max((line - from) / (to - from), 0), 1)
+            let along = alongX ? a.x + t * (b.x - a.x) : a.y + t * (b.y - a.y)
+            if p.span.contains(along) { return PortalHit(portal: i, along: along) }
+        }
+        return nil
+    }
+}
+
+/// Controlled Mac: every way back to the controller, one `EdgeReturnTrigger` each, answering
+/// with the zone the pointer pushed through.
+struct ReturnWatch {
+    struct Zone: Equatable {
+        var edge: ScreenEdge                    // side of this Mac's screen
+        var span: ClosedRange<Double>?          // stretch along it (nil = the whole side)
+    }
+    static let maxZones = 32
+
+    let zones: [Zone]
+    /// The controller speaks v5 and wants the zone index with each return.
+    let reportsZone: Bool
+    private var triggers: [EdgeReturnTrigger]
+
+    init(zones: [Zone], reportsZone: Bool) {
+        self.zones = zones
+        self.reportsZone = reportsZone
+        triggers = Array(repeating: EdgeReturnTrigger(), count: zones.count)
+    }
+
+    /// From the controller's setup: its v5 zones, or the single edge an older controller sends.
+    /// nil when the controller doesn't want control handed back at an edge (window mode).
+    init?(setup: ControlSetup) {
+        guard setup.autoReturn else { return nil }
+        let v5 = (setup.returnZones ?? []).lazy.compactMap { z in Self.span(z.span).map { Zone(edge: z.edge, span: $0) } }
+        let zones = Array(v5.prefix(Self.maxZones))
+        if zones.isEmpty {
+            self.init(zones: [Zone(edge: setup.hostEdge.opposite, span: setup.returnSpan.flatMap(Self.span))], reportsZone: false)
+        } else {
+            self.init(zones: zones, reportsZone: true)
+        }
+    }
+
+    private static func span(_ v: [Double]) -> ClosedRange<Double>? {
+        v.count == 2 && v.allSatisfy(\.isFinite) && v[0] <= v[1] ? v[0]...v[1] : nil
+    }
+
+    /// `intended` is where the move would have put the cursor before clamping to `bounds`.
+    mutating func check(cursor: CGPoint, intended: CGPoint, bounds: CGRect, buttonHeld: Bool) -> Int? {
+        var fired: Int?
+        for i in zones.indices {
+            let hit = triggers[i].shouldReturn(cursor: cursor, intended: intended, bounds: bounds, edge: zones[i].edge,
+                                               buttonHeld: buttonHeld, span: zones[i].span)
+            if hit, fired == nil { fired = i }
+        }
+        return fired
     }
 }
 
