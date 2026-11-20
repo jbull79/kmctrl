@@ -30,7 +30,7 @@ extension ControlEvent {
         case .mediaKey:
             // Same list the controller forwards: never power, eject or caps lock.
             guard MediaKey.forwarded.contains(keyCode), button == 0 || button == 1 else { return nil }
-        case .enterAt, .flagsChanged, .releaseAll, .hostStats, .ping, .wakeDisplay, .clipboard, .edgeSetup:
+        case .enterAt, .flagsChanged, .releaseAll, .hostStats, .ping, .wakeDisplay, .clipboard, .edgeSetup, .logRequest, .log:
             break
         }
         return e

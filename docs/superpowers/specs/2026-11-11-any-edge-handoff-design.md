@@ -27,10 +27,13 @@ exactly as `HandoffGeometry` did.
 
 ### Which edges become portals
 
-1. **Facing the tile.** Any monitor whose edge faces a side of the tile across a gap of no
-   more than 150 mm (physical, at the anchor's density) is a portal. The anchor itself has a
-   gap of 0. The gap allows for bezels and desk space, because macOS display positions are
-   not physical.
+1. **Facing the tile.** On each side of the tile, the nearest monitor whose edge faces that
+   side is a portal. The anchor itself sits flush. macOS display positions are not physical,
+   so the drawn distance doesn't matter. A small overlap still counts; one covering more than
+   half the tile across that side doesn't. A nearer monitor blocks a farther one on the same
+   stretch.
+   - *0.8.23 required a gap of 0 to 150 mm and no overlap. On Joe's work Mac the home screen is
+     drawn a few points over the DELL's left end, so its side never linked. Fixed in 0.8.24.*
 2. **Stretches that lead into another monitor are cut out.** On those stretches the pointer
    just moves on to the next monitor, as it does today.
 3. **Between two monitors.** If the tile is dropped on a seam (the anchor edge has another

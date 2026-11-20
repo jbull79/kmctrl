@@ -10,6 +10,8 @@ import AppKit
 struct ScreenArrangementView: View {
     @Binding var edge: ScreenEdge
     @Binding var displayID: UInt32
+    /// The monitor itself: found again after macOS gives it a new display number.
+    @Binding var identity: DisplayIdentity?
     @Binding var offsetMM: Double?
     /// The other Mac's screen as last reported (nil → assumed 24" until it connects once).
     var remote: ScreenGeometry?
@@ -18,13 +20,17 @@ struct ScreenArrangementView: View {
     @State private var dragDisplay: UInt32?
     @State private var dragOffset: Double?
     private var liveEdge: ScreenEdge { dragEdge ?? edge }
-    private var liveDisplay: UInt32 { dragDisplay ?? displayID }
     private var other: ScreenGeometry { remote ?? .assumedRemote }
 
     var body: some View {
         let monitors = Self.monitors()
-        let layout = HandoffLayout(monitors: monitors, remote: other, anchorID: liveDisplay, edge: liveEdge,
-                                   offsetMM: liveOffset(monitors))
+        // The saved monitor, wherever macOS has numbered it now. While it's unplugged the other
+        // Mac is drawn beside the main display, and the saved arrangement is left alone.
+        let saved = HandoffAnchor.resolve(saved: identity, savedID: displayID, among: monitors)
+        let missing = dragDisplay == nil && saved == nil && (displayID != 0 || identity != nil)
+        let anchor = dragDisplay ?? saved ?? CGMainDisplayID()
+        let layout = HandoffLayout(monitors: monitors, remote: other, anchorID: anchor, edge: liveEdge,
+                                   offsetMM: liveOffset(monitors, anchor: anchor))
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geo in
                 let c = canvas(layout, in: geo.size)
@@ -46,7 +52,10 @@ struct ScreenArrangementView: View {
                                     }
                                     .onEnded { _ in
                                         if let e = dragEdge { edge = e }
-                                        if let d = dragDisplay { displayID = d }
+                                        if let d = dragDisplay {
+                                            displayID = d
+                                            identity = monitors.first { $0.id == d }?.identity
+                                        }
                                         if let o = dragOffset { offsetMM = o }
                                         dragEdge = nil; dragDisplay = nil; dragOffset = nil
                                     }
@@ -56,6 +65,10 @@ struct ScreenArrangementView: View {
                 .frame(width: geo.size.width, height: geo.size.height)
             }
             .frame(height: 170)
+            if missing {
+                Text("\(identity?.name.isEmpty == false ? identity!.name : "The monitor you placed it beside") isn’t connected, so the other Mac is shown beside the main display for now. Your arrangement is kept and comes back with the monitor.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             Text(caption(layout))
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -69,7 +82,8 @@ struct ScreenArrangementView: View {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return NSScreen.screens.compactMap { s in
             guard let id = (s.deviceDescription[key] as? NSNumber)?.uint32Value else { return nil }
-            return HandoffMonitor(id: id, screen: .display(id), name: s.localizedName)
+            return HandoffMonitor(id: id, screen: .display(id), name: s.localizedName,
+                                  identity: .of(id, name: s.localizedName))
         }
     }
 
@@ -82,9 +96,9 @@ struct ScreenArrangementView: View {
         count == 1 ? "This Mac" : (m.name.isEmpty ? "Screen \(i + 1)" : m.name)
     }
 
-    private func liveOffset(_ monitors: [HandoffMonitor]) -> Double {
+    private func liveOffset(_ monitors: [HandoffMonitor], anchor: UInt32) -> Double {
         if let o = dragOffset ?? offsetMM { return o }
-        let g = (monitors.first { $0.id == liveDisplay } ?? monitors.first)?.screen ?? .assumedRemote
+        let g = (monitors.first { $0.id == anchor } ?? monitors.first)?.screen ?? .assumedRemote
         return HandoffLayout.centredOffsetMM(local: g, remote: other, edge: liveEdge)
     }
 

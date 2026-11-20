@@ -158,15 +158,47 @@ final class HandoffLayoutPortalTests: XCTestCase {
         XCTAssertEqual(l.returnPortal(zone: side), side)
         XCTAssertEqual(l.returnPortal(zone: nil), l.anchorPortal)        // a v4 Mac names no zone
         XCTAssertEqual(l.returnPortal(zone: 99), l.anchorPortal)         // nor a made-up one
-        XCTAssertNil(Desk.layout(offsetMM: 5000).returnPortal(zone: nil))
+        XCTAssertNil(Desk.layout(offsetMM: 5000, monitors: [HandoffMonitor(id: 1, screen: Desk.ultrawide)]).returnPortal(zone: nil))
     }
 
-    func testAMonitorFarAwayIsNotANeighbour() {
+    /// What Joe's work Mac really draws: the home screen a little over the DELL's left end. Its
+    /// side still leads there, and moving up into the DELL stays on the work Mac.
+    func testATileSlightlyOverTheNeighbourStillLinksItsSide() throws {
+        var dell = Desk.work24
+        dell.x = 2230                                    // the tile's right side is at 2276
+        let l = Desk.layout(monitors: [HandoffMonitor(id: 1, screen: Desk.ultrawide), HandoffMonitor(id: 2, screen: dell)])
+        let side = l.portals[try XCTUnwrap(l.portal(on: 2, edge: .left))]
+        XCTAssertEqual(side.remoteSpan.lowerBound, 0, accuracy: 0.5)
+        XCTAssertEqual(side.remoteSpan.upperBound, 1440, accuracy: 0.5)
+        XCTAssertEqual(l.portals[try XCTUnwrap(l.portal(on: 1, edge: .top))].span.upperBound, 2230, accuracy: 0.5)
+        let back = l.returnPoint(portal: l.portal(on: 2, edge: .left)!, leaving: CGPoint(x: 2559, y: 720))
+        XCTAssertEqual(back.x, 2230 + HandoffLayout.inset, accuracy: 0.001)       // just inside the DELL
+    }
+
+    /// macOS display positions aren't physical: the nearest monitor beside the home screen is its
+    /// neighbour however far apart they are drawn.
+    func testANeighbourDrawnFarAwayStillCounts() {
         var far = Desk.work24
-        far.x = 4000                                     // 400 mm from the home screen's side
+        far.x = 4000
         let l = Desk.layout(monitors: [HandoffMonitor(id: 1, screen: Desk.ultrawide), HandoffMonitor(id: 2, screen: far)])
-        XCTAssertEqual(l.portals.count, 1)
+        XCTAssertNotNil(l.portal(on: 2, edge: .left))
+    }
+
+    func testOnlyTheNearestMonitorOnASideCounts() {
+        var beyond = Desk.work24
+        beyond.x = 5120                                  // right of the work 24", same height
+        let l = Desk.layout(monitors: Desk.monitors + [HandoffMonitor(id: 3, screen: beyond)])
+        XCTAssertNotNil(l.portal(on: 2, edge: .left))
+        XCTAssertNil(l.portal(on: 3, edge: .left))
+    }
+
+    /// A monitor overlapping most of the home screen isn't beside it.
+    func testAMonitorMostlyUnderTheTileIsNotASideNeighbour() {
+        var under = Desk.work24
+        under.x = 400
+        let l = Desk.layout(monitors: [HandoffMonitor(id: 1, screen: Desk.ultrawide), HandoffMonitor(id: 2, screen: under)])
         XCTAssertNil(l.portal(on: 2, edge: .left))
+        XCTAssertNil(l.portal(on: 2, edge: .right))
     }
 
     /// Slid partly over the work 24": where the pointer would move straight up into the work

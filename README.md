@@ -10,7 +10,7 @@ other machine without admin rights.
 
 ## Download
 
-**[⬇ KMctrl 0.8.23 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.8.23/KMctrl-0.8.23.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
+**[⬇ KMctrl 0.8.24 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.8.24/KMctrl-0.8.24.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
 
 Unsigned, ad-hoc, **Apple Silicon only** (won't run on Intel). macOS quarantines
 downloaded unsigned apps — clear it (no admin needed on your own files):
@@ -55,6 +55,12 @@ If it still won't open, your MDM enforces Gatekeeper — build locally in Xcode 
   shows it in Settings.
 - **Auto-reconnect** — a lost link comes back by itself, until you click Disconnect. Ending the
   session from the controlled Mac stays ended.
+- **The arrangement stays put** — it's saved against the monitor itself, not the display number
+  macOS can change after sleep or a reconnect. While that monitor is unplugged, the other Mac sits
+  beside the main display, and the saved arrangement returns with the monitor.
+- **Logs from both Macs** — Settings → Diagnostics → Save Logs (or `open -g -b com.kmctrl.KMctrl
+  kmctrl://logs`) writes this Mac's log, and the other Mac's over the open session, to
+  `~/Library/Logs/KMctrl`. KMctrl's own log only; keystrokes and clipboard contents are never logged.
 
 ## Use
 

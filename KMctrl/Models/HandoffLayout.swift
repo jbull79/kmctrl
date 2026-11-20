@@ -32,6 +32,8 @@ struct HandoffMonitor: Equatable {
     var id: UInt32
     var screen: ScreenGeometry
     var name: String = ""
+    /// Which physical monitor this is, so a saved arrangement survives display renumbering.
+    var identity: DisplayIdentity? = nil
 
     /// Every active monitor, in CoreGraphics order, named as System Settings names them.
     static func current() -> [HandoffMonitor] {
@@ -43,7 +45,10 @@ struct HandoffMonitor: Equatable {
         let names = Dictionary(NSScreen.screens.compactMap { s in
             (s.deviceDescription[key] as? NSNumber).map { ($0.uint32Value, s.localizedName) }
         }, uniquingKeysWith: { a, _ in a })
-        return ids.prefix(Int(count)).map { HandoffMonitor(id: $0, screen: .display($0), name: names[$0] ?? "") }
+        return ids.prefix(Int(count)).map { id in
+            let name = names[id] ?? ""
+            return HandoffMonitor(id: id, screen: .display(id), name: name, identity: .of(id, name: name))
+        }
     }
 }
 
@@ -62,17 +67,15 @@ struct HandoffPortal: Equatable {
 ///
 /// The screen is placed as in Settings: beside an *anchor* monitor's edge, slid along it in
 /// millimetres, at the anchor's physical density (so a 24" beside a 49" lines up as on the
-/// desk). That gives a *tile* in this Mac's global points. Every monitor edge facing the tile
-/// (across a bezel-sized gap) is a *portal*, minus stretches that lead straight into another
-/// monitor. Dropped on the seam between two monitors, the tile sits *between* them: both seam
+/// desk). That gives a *tile* in this Mac's global points. On each side of the tile, the nearest
+/// monitor's facing edge is a *portal*, minus stretches that lead straight into another monitor.
+/// macOS display positions aren't physical, so how far apart they are drawn doesn't matter, and
+/// a small overlap still counts. Dropped on the seam between two monitors, the tile sits *between* them: both seam
 /// edges lead to it. Positions along a portal map through the tile, so each crossing lands at
 /// the matching place.
 struct HandoffLayout: Equatable {
     /// Land this far inside an edge so the pointer isn't sitting on it.
     static let inset = 4.0
-    /// A monitor this close to a side of the other screen (physically) is its neighbour —
-    /// room for bezels and desk space, since macOS display positions aren't physical.
-    static let maxGapMM = 150.0
     /// Shorter stretches (points) don't hand off.
     static let minStretch = 8.0
     /// Edges this close (points) touch.
@@ -282,22 +285,28 @@ struct HandoffLayout: Equatable {
                                     ... toRemote(span.upperBound, alongX: x, tile: tile, remote: remote))
         }
 
-        let maxGap = maxGapMM * pointsPerMM(anchor.screen, along: edge)
         var found: [HandoffPortal] = []
-        for m in monitors {
-            let r = m.screen.rect
-            for side in [ScreenEdge.top, .bottom, .left, .right] {          // the tile's side m may face
-                let gap = side == .right || side == .bottom ? line(r, side.opposite) - line(tile, side)
-                                                            : line(tile, side) - line(r, side.opposite)
-                guard gap >= -touch, gap <= maxGap else { continue }
-                let e = side.opposite                                         // m's edge facing the tile
-                let x = alongIsX(e)
-                guard let shared = overlap(extent(r, alongX: x), tileAlong(x)) else { continue }
+        for side in [ScreenEdge.top, .bottom, .left, .right] {              // each side of the tile
+            let e = side.opposite                                             // a neighbour's edge facing it
+            let x = alongIsX(e)
+            let across = alongIsX(side) ? tile.height : tile.width
+            // The monitors on that side, nearest first. One overlapping the tile a little still
+            // counts (positions aren't physical); one mostly under it isn't beside it.
+            let beside = monitors.compactMap { m -> (monitor: HandoffMonitor, gap: Double, shared: ClosedRange<Double>)? in
+                let r = m.screen.rect
+                let gap = side == .right || side == .bottom ? line(r, e) - line(tile, side) : line(tile, side) - line(r, e)
+                guard gap > -across / 2, let shared = overlap(extent(r, alongX: x), tileAlong(x)),
+                      shared.upperBound - shared.lowerBound >= minStretch else { return nil }
+                return (m, gap, shared)
+            }.sorted { $0.gap < $1.gap }
+            var claimed: [ClosedRange<Double>] = []                           // a nearer monitor is in the way
+            for (m, _, shared) in beside {
                 let exempt = between && m.id == anchor.id && e == edge
                 let cuts = monitors.filter { n in
-                    n.id != m.id && touchesBeyond(n.screen.rect, r, e) && !(exempt && seamIDs.contains(n.id))
+                    n.id != m.id && touchesBeyond(n.screen.rect, m.screen.rect, e) && !(exempt && seamIDs.contains(n.id))
                 }.map { extent($0.screen.rect, alongX: x) }
-                for piece in subtract(shared, cuts) { found.append(make(m, e, piece)) }
+                for piece in subtract(shared, cuts + claimed) { found.append(make(m, e, piece)) }
+                claimed.append(shared)
             }
         }
         for n in seamNeighbours {

@@ -14,6 +14,12 @@ final class AppSettings: ObservableObject {
     @Published var useEdgeMode: Bool { didSet { defaults.set(useEdgeMode, forKey: Keys.edgeMode) } }
     /// Which display's edge hands off (CGDirectDisplayID). 0 = whole desktop / any outer edge.
     @Published var handoffDisplayID: UInt32 { didSet { defaults.set(Int(handoffDisplayID), forKey: Keys.handoffDisplay) } }
+    /// That monitor itself (UUID, vendor, model, serial). macOS can give a monitor a new display
+    /// number after sleep or a reconnect; this keeps the arrangement on the right one. Only a
+    /// drag in the arrangement changes it.
+    @Published var handoffDisplayIdentity: DisplayIdentity? {
+        didSet { defaults.set(handoffDisplayIdentity.flatMap { try? JSONEncoder().encode($0) }, forKey: Keys.handoffDisplayIdentity) }
+    }
     /// Run without a Dock icon. Combined with `menuBarVisible` → Dock / Menu bar / Both.
     @Published var hideDockIcon: Bool { didSet { defaults.set(hideDockIcon, forKey: Keys.hideDock) } }
     @Published var menuBarVisible: Bool { didSet { defaults.set(menuBarVisible, forKey: Keys.menuBar) } }
@@ -86,6 +92,7 @@ final class AppSettings: ObservableObject {
         static let controlEdge = "kmctrl.controlEdge"
         static let edgeMode = "kmctrl.useEdgeMode"
         static let handoffDisplay = "kmctrl.handoffDisplayID"
+        static let handoffDisplayIdentity = "kmctrl.handoffDisplayIdentity"
         static let hideDock = "kmctrl.hideDockIcon"
         static let menuBar = "kmctrl.menuBarVisible"
         static let keepAwake = "kmctrl.keepAwakeEnabled"
@@ -126,6 +133,8 @@ final class AppSettings: ObservableObject {
         controlEdge = ScreenEdge(rawValue: defaults.string(forKey: Keys.controlEdge) ?? "") ?? .right
         useEdgeMode = defaults.bool(forKey: Keys.edgeMode)
         handoffDisplayID = UInt32(defaults.integer(forKey: Keys.handoffDisplay))
+        handoffDisplayIdentity = defaults.data(forKey: Keys.handoffDisplayIdentity)
+            .flatMap { try? JSONDecoder().decode(DisplayIdentity.self, from: $0) }
         hideDockIcon = defaults.bool(forKey: Keys.hideDock)
         menuBarVisible = defaults.object(forKey: Keys.menuBar) as? Bool ?? true
         keepAwakeEnabled = defaults.bool(forKey: Keys.keepAwake)

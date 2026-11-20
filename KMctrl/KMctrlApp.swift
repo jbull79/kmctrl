@@ -29,10 +29,14 @@ final class AppModel: ObservableObject {
         settings.$mouseSensitivity.sink { v in host.mouseSensitivity = v }.store(in: &bag)
         // Arrangement edits in Settings apply to an open session straight away. A drag commits
         // edge, monitor and position together, so let the burst settle first.
-        settings.$controlEdge.combineLatest(settings.$handoffDisplayID, settings.$handoffOffsetMM)
+        Publishers.CombineLatest4(settings.$controlEdge, settings.$handoffDisplayID,
+                                  settings.$handoffDisplayIdentity, settings.$handoffOffsetMM)
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
-            .sink { edge, display, offset in host.arrangementChanged(edge: edge, displayID: display, offsetMM: offset) }
+            .sink { edge, display, identity, offset in
+                host.arrangementChanged(edge: edge, displayID: display, identity: identity, offsetMM: offset)
+            }
             .store(in: &bag)
+        LogExchange.shared.deviceName = { settings.deviceName }
         // Hotkey is live only while there is a session to re-enter.
         settings.$regrabHotkeyEnabled.combineLatest(host.$state)
             .map { on, state in on && state != .idle }
@@ -90,9 +94,33 @@ final class AppModel: ObservableObject {
         LocalNetwork.startTrackingInterfaceOrder()   // follow macOS's interface ranking from launch
         SystemEventLog.shared.start()   // sleep, wake and network changes, for Diagnostics
         manager.startServices()
+        adoptHandoffIdentity()
+        urlCommands.install { [weak self] in self?.pullLogs() }
         applyActivationPolicy()
         if settings.keepAwakeEnabled { keepAwake.start() }
         updates.start()
+    }
+
+    /// An arrangement saved by 0.8.23 or earlier knows only the display number: remember which
+    /// monitor that is now, so the arrangement survives macOS renumbering it later.
+    private func adoptHandoffIdentity() {
+        guard let identity = HandoffAnchor.adopt(saved: settings.handoffDisplayIdentity, savedID: settings.handoffDisplayID,
+                                                 among: HandoffMonitor.current()) else { return }
+        DebugLog.log("arrangement: the other Mac sits beside \(identity.name.isEmpty ? "display \(settings.handoffDisplayID)" : identity.name)")
+        settings.handoffDisplayIdentity = identity
+    }
+
+    private let urlCommands = URLCommands()
+
+    /// Save this Mac's diagnostics log and ask the other Mac in each open session for its log
+    /// (Settings → Diagnostics, or `open -g kmctrl://logs`). All of it lands in ~/Library/Logs/KMctrl.
+    func pullLogs() {
+        let logs = LogExchange.shared
+        logs.saveOwn()
+        var asked = false
+        if host.requestPeerLog() { logs.asked(host.peerName ?? "the other Mac"); asked = true }
+        if manager.requestPeerLog() { logs.asked(manager.controlActiveFrom ?? "the other Mac"); asked = true }
+        if !asked { logs.noPeer() }
     }
 
     /// Dock icon visibility. The menu-bar item is controlled separately (settings.menuBarVisible).

@@ -39,9 +39,12 @@ struct SessionHello: Codable {
     /// v4 (0.8.16) adds edge-switch geometry (`ControlAck.screen`, `ControlSetup.returnArea/
     /// returnSpan`, `.enterAt`, `ControlReturn.at`); v5 (0.8.23) adds a hand-off at every edge
     /// touching the other Mac (`ControlSetup.returnZones/arrangement`, `ControlReturn.zone`) —
-    /// optional JSON fields that v4 peers ignore.
+    /// optional JSON fields that v4 peers ignore. v6 (0.8.24) lets either Mac ask the other for
+    /// its diagnostics log (`.logRequest`/`.log`, `ControlReturn.log/logRequest`) — sent only to
+    /// v6 peers, since an older one drops the session on the unknown kind or reads the reply as
+    /// a return of control.
     /// The controlled Mac echoes its own version in `ControlAck.version`.
-    static let currentControlVersion = 5
+    static let currentControlVersion = 6
 }
 
 /// Responder's reply to a `.sync` hello: whether it will sync with this peer. Sent before

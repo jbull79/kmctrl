@@ -19,6 +19,8 @@ enum ControlEventKind: String, Codable {
     case clipboard    // host→client clipboard hand-off (payload in `clipboard`); JSON only; protocol v2
     case enterAt      // host→client: edge switch entered here (dx, dy = controlled Mac's global points); protocol v4
     case edgeSetup    // host→client: updated return edge/stretch after a monitor change (payload in `setup`); JSON only; protocol v4
+    case logRequest   // host→client: send me your diagnostics log (answered in ControlReturn.log); protocol v6
+    case log          // host→client: this Mac's diagnostics log, asked for by ControlReturn.logRequest (payload in `log`); JSON only; protocol v6
 }
 
 /// Which screen edge of the controller hands off to the other Mac.
@@ -104,13 +106,18 @@ struct ControlReturn: Codable {
     /// v5: which of the setup's `returnZones` the pointer pushed through on a return, so the
     /// controller lands on the matching monitor. Absent → the anchor edge.
     var zone: Int? = nil
+    /// v6: the controlled Mac's diagnostics log, answering a `.logRequest` (never a return).
+    var log: LogBundle? = nil
+    /// v6: the controlled Mac asks for the controller's log, answered with a `.log` event (never a return).
+    var logRequest: Bool? = nil
 
     init(ok: Bool = true, pong: Double? = nil, clipboard: ClipboardPayload? = nil, at: [Double]? = nil,
-         screen: ScreenGeometry? = nil, zone: Int? = nil) {
+         screen: ScreenGeometry? = nil, zone: Int? = nil, log: LogBundle? = nil, logRequest: Bool? = nil) {
         self.ok = ok; self.pong = pong; self.clipboard = clipboard; self.at = at; self.screen = screen; self.zone = zone
+        self.log = log; self.logRequest = logRequest
     }
     /// A frame with a payload is not a return-of-control signal.
-    var isReturnSignal: Bool { pong == nil && clipboard == nil && screen == nil }
+    var isReturnSignal: Bool { pong == nil && clipboard == nil && screen == nil && log == nil && logRequest == nil }
 }
 
 struct ControlEvent: Codable {
@@ -130,10 +137,14 @@ struct ControlEvent: Codable {
     var clipboard: ClipboardPayload? = nil
     /// Updated return setup for `.edgeSetup` events (v4). JSON only, like `clipboard`.
     var setup: ControlSetup? = nil
+    /// The controller's diagnostics log for `.log` events (v6). JSON only, like `clipboard`.
+    var log: LogBundle? = nil
 
-    var isBinaryEncodable: Bool { kind != .clipboard && kind != .edgeSetup && clipboard == nil && setup == nil }
+    var isBinaryEncodable: Bool {
+        kind != .clipboard && kind != .edgeSetup && kind != .log && clipboard == nil && setup == nil && log == nil
+    }
 
-    enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars, clipboard, setup }
+    enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars, clipboard, setup, log }
 
     // Custom encode so `chars` is omitted (not `null`) when nil; decode stays synthesized.
     func encode(to encoder: Encoder) throws {
@@ -149,6 +160,7 @@ struct ControlEvent: Codable {
         try c.encodeIfPresent(chars, forKey: .chars)
         try c.encodeIfPresent(clipboard, forKey: .clipboard)
         try c.encodeIfPresent(setup, forKey: .setup)
+        try c.encodeIfPresent(log, forKey: .log)
     }
 }
 
@@ -163,7 +175,7 @@ extension ControlEventKind {
     static let wireOrder: [ControlEventKind] = [
         .mouseMove, .mouseDown, .mouseUp, .scroll,
         .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping,
-        .mediaKey, .wakeDisplay, .clipboard, .enterAt, .edgeSetup
+        .mediaKey, .wakeDisplay, .clipboard, .enterAt, .edgeSetup, .logRequest, .log
     ]
     var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
     init?(wireByte: UInt8) {

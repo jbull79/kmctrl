@@ -172,6 +172,7 @@ struct SettingsView: View {
             Section {
                 Toggle("Use edge mode to drive another Mac", isOn: $settings.useEdgeMode)
                 ScreenArrangementView(edge: $settings.controlEdge, displayID: $settings.handoffDisplayID,
+                                      identity: $settings.handoffDisplayIdentity,
                                       offsetMM: $settings.handoffOffsetMM, remote: settings.remoteScreen)
             } header: {
                 Text("Edge hand-off arrangement")

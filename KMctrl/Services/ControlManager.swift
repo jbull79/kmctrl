@@ -64,6 +64,8 @@ final class ControlManager: ObservableObject {
     /// The link of the active inbound control session, so this Mac can end it (and hand
     /// its clipboard back over it).
     private(set) var controlledLink: PeerLink?
+    /// The controlling Mac's protocol version on `controlledLink`.
+    private var controlledHostVersion = 1
     /// On-screen "being controlled" badge (+ kill switch) shown while a remote drives us.
     private let badge = ControlBadgeController()
     /// Re-reports this Mac's screen to the controller when monitors change mid-session.
@@ -201,6 +203,7 @@ final class ControlManager: ObservableObject {
         let replaced = Self.replacesSession(of: controlledLink?.remoteFingerprint, with: link.remoteFingerprint) ? controlledLink : nil
         controlActiveFrom = name
         controlledLink = link
+        controlledHostVersion = hostVersion
         replaced?.cancel()      // lets go of anything its dead session left held down
         badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
         clipboard.setActive(true, sessionFingerprint: link.remoteFingerprint)
@@ -229,6 +232,18 @@ final class ControlManager: ObservableObject {
                         continue
                     }
                     if event.kind == .hostStats { continue }
+                    if event.kind == .logRequest {          // the controller wants our log (v6)
+                        guard ControlHost.sendsLogRequest(peerVersion: hostVersion) else { continue }
+                        Task { @MainActor in
+                            guard let log = LogExchange.shared.answer(to: name) else { return }
+                            Task.detached { _ = link.sendSecureObjectSync(ControlReturn(log: log)) }   // big: off the main thread
+                        }
+                        continue
+                    }
+                    if event.kind == .log {                 // the controller's log, which we asked for (v6)
+                        if let log = event.log { Task { @MainActor in LogExchange.shared.received(log, from: name) } }
+                        continue
+                    }
                     if event.kind == .wakeDisplay { DisplayWake.wake(); continue }
                     if event.kind == .edgeSetup {           // the controller re-laid the screens out
                         if let setup = event.setup {
@@ -269,6 +284,15 @@ final class ControlManager: ObservableObject {
         }
         link.cancel()
         DebugLog.log("control: session ended (\(name))")
+    }
+
+    /// Ask the controlling Mac for its diagnostics log (it comes back as a `.log` event). False
+    /// when nothing controls this Mac or the controller is too old to answer — a v5 one would
+    /// read the request as a return of control.
+    func requestPeerLog() -> Bool {
+        guard let link = controlledLink, ControlHost.sendsLogRequest(peerVersion: controlledHostVersion) else { return false }
+        Task.detached { _ = link.sendSecureObjectSync(ControlReturn(logRequest: true)) }
+        return true
     }
 
     /// The controller's monitor arrangement (v5), kept to show in Settings. Ignored when it

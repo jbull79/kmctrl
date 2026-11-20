@@ -142,6 +142,7 @@ struct ContentView: View {
         host.onRemoteScreen = { settings.remoteScreen = $0 }  // remember its size for the arrangement
         host.controlEdge = settings.controlEdge
         host.controlDisplayID = settings.handoffDisplayID
+        host.controlDisplayIdentity = settings.handoffDisplayIdentity
         host.useBinaryControl = settings.binaryControl        // experimental codec flag
         host.flushIntervalMs = settings.flushIntervalMs       // experimental cadence knob
         host.connect(to: peer, localName: settings.deviceName)

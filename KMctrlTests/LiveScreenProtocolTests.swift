@@ -65,11 +65,13 @@ final class LiveArrangementTests: XCTestCase {
 
     func testIdleHostTakesTheNewArrangement() {
         let host = ControlHost()
-        host.arrangementChanged(edge: .top, displayID: 7, offsetMM: 120)
+        let dell = DisplayIdentity(uuid: "AAAA", vendor: 1, model: 2, serial: 3, name: "DELL")
+        host.arrangementChanged(edge: .top, displayID: 7, identity: dell, offsetMM: 120)
         XCTAssertEqual(host.controlEdge, .top)
         XCTAssertEqual(host.controlDisplayID, 7)
+        XCTAssertEqual(host.controlDisplayIdentity, dell)
         XCTAssertEqual(host.handoffOffsetMM, 120)
-        host.arrangementChanged(edge: .top, displayID: 7, offsetMM: nil)   // back to centred
+        host.arrangementChanged(edge: .top, displayID: 7, identity: dell, offsetMM: nil)   // back to centred
         XCTAssertNil(host.handoffOffsetMM)
     }
 }

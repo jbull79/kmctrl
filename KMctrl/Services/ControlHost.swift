@@ -81,6 +81,17 @@ final class ControlHost: ObservableObject {
     nonisolated static func sendsProbes(peerVersion: Int) -> Bool { peerVersion >= 2 }
     /// `.edgeSetup` is v4; an older peer drops the session on the unknown kind.
     nonisolated static func sendsEdgeSetup(peerVersion: Int) -> Bool { peerVersion >= 4 }
+    /// `.logRequest`/`.log` are v6; an older peer drops the session on the unknown kind.
+    nonisolated static func sendsLogRequest(peerVersion: Int) -> Bool { peerVersion >= 6 }
+
+    /// Ask the controlled Mac for its diagnostics log (it comes back in `ControlReturn.log`).
+    /// False when there's no session or the other Mac is too old to answer.
+    func requestPeerLog() -> Bool {
+        guard state == .connected || state == .capturing, linkBox.link != nil,
+              Self.sendsLogRequest(peerVersion: peerVersion) else { return false }
+        sendOnQueue(ControlEvent(kind: .logRequest))
+        return true
+    }
 
     /// How a session switches at the edge: edge mode's event tap, the permission-free pointer
     /// watcher (experimental), or not at all.
@@ -107,6 +118,8 @@ final class ControlHost: ObservableObject {
     var edgeModeEnabled = false
     var controlEdge: ScreenEdge = .right     // which edge hands off (set by UI)
     var controlDisplayID: UInt32 = 0         // which monitor's edge (0 = whole desktop)
+    /// That monitor itself, so the arrangement still finds it after macOS renumbers displays.
+    var controlDisplayIdentity: DisplayIdentity?
     /// EXPERIMENTAL, set by the UI before `connect`: switch on the pointer resting at the
     /// hand-off edge (window-mode capture, no event tap), and ask the peer to return control
     /// when its pointer is pushed past the opposite edge.
@@ -419,9 +432,19 @@ final class ControlHost: ObservableObject {
     /// that leads to it, and return the setup that arms the other Mac's matching ways back and
     /// tells it the arrangement.
     private func layOutHandoff(remote: ScreenGeometry) -> ControlSetup {
-        // A hand-off monitor that has been unplugged falls back to the main display.
-        let id = controlDisplayID != 0 && CGDisplayIsOnline(controlDisplayID) != 0 ? controlDisplayID : CGMainDisplayID()
-        let layout = HandoffLayout(monitors: HandoffMonitor.current(), remote: remote, anchorID: id,
+        // Find the hand-off monitor by what it is, not its display number, which macOS can change.
+        // One that is unplugged falls back to the main display until it's back; the saved
+        // arrangement itself is never changed here.
+        let monitors = HandoffMonitor.current()
+        let found = HandoffAnchor.resolve(saved: controlDisplayIdentity, savedID: controlDisplayID, among: monitors)
+        let wanted = controlDisplayIdentity?.name ?? "display \(controlDisplayID)"
+        if found == nil, controlDisplayID != 0 || controlDisplayIdentity != nil {
+            DebugLog.log("control host: hand-off monitor \(wanted) isn't connected — using the main display until it's back", .warn)
+        } else if let found, found != controlDisplayID {
+            DebugLog.log("control host: hand-off monitor \(wanted) is now display \(found) (saved as \(controlDisplayID))")
+        }
+        let id = found ?? CGMainDisplayID()
+        let layout = HandoffLayout(monitors: monitors, remote: remote, anchorID: id,
                                    edge: controlEdge, offsetMM: handoffOffsetMM)
         handoff = layout
         remoteScreen = remote
@@ -452,9 +475,10 @@ final class ControlHost: ObservableObject {
 
     /// The arrangement was edited in Settings (screen slid along the edge, edge or monitor
     /// changed): take it now, and re-lay out an open session with it.
-    func arrangementChanged(edge: ScreenEdge, displayID: UInt32, offsetMM: Double?) {
-        guard edge != controlEdge || displayID != controlDisplayID || offsetMM != handoffOffsetMM else { return }
-        controlEdge = edge; controlDisplayID = displayID; handoffOffsetMM = offsetMM
+    func arrangementChanged(edge: ScreenEdge, displayID: UInt32, identity: DisplayIdentity?, offsetMM: Double?) {
+        guard edge != controlEdge || displayID != controlDisplayID || identity != controlDisplayIdentity
+                || offsetMM != handoffOffsetMM else { return }
+        controlEdge = edge; controlDisplayID = displayID; controlDisplayIdentity = identity; handoffOffsetMM = offsetMM
         relayOut(because: "arrangement changed in Settings")
     }
 
@@ -503,6 +527,15 @@ final class ControlHost: ObservableObject {
                         DebugLog.log("control host: ignoring an impossible screen size from the peer", .warn); continue
                     }
                     await MainActor.run { self?.screensChanged(remote: screen) }
+                } else if let log = r.log {
+                    await MainActor.run { LogExchange.shared.received(log, from: link.remoteName) }
+                } else if r.logRequest == true {
+                    await MainActor.run {
+                        guard let self, Self.sendsLogRequest(peerVersion: self.peerVersion),
+                              self.state == .connected || self.state == .capturing,
+                              let log = LogExchange.shared.answer(to: link.remoteName) else { return }
+                        self.sendOnQueue(ControlEvent(kind: .log, log: log))
+                    }
                 } else if let payload = r.clipboard {
                     await MainActor.run {
                         guard let self else { return }

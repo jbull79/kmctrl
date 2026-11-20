@@ -11,6 +11,6 @@ final class ProtocolVersionTests: XCTestCase {
     func testAckCarriesCurrentVersion() throws {
         let ack = ControlAck(accepted: true, version: SessionHello.currentControlVersion)
         let back = try JSONDecoder().decode(ControlAck.self, from: JSONEncoder().encode(ack))
-        XCTAssertEqual(back.version, 5)   // v5: a hand-off at every edge touching the other Mac
+        XCTAssertEqual(back.version, 6)   // v6: either Mac can ask the other for its log
     }
 }

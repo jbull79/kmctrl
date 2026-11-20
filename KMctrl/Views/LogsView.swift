@@ -5,6 +5,8 @@ import AppKit
 /// connection logs when troubleshooting, then Copy or Clear.
 struct LogsView: View {
     @ObservedObject private var log = DebugLog.shared
+    @ObservedObject private var exchange = LogExchange.shared
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         Form {
@@ -12,6 +14,23 @@ struct LogsView: View {
                 Toggle("Enable diagnostics logging", isOn: $log.enabled)
             } footer: {
                 Text("Off by default. When on, KMctrl records detailed connection/control logs for troubleshooting (and mirrors to Console).")
+            }
+
+            Section {
+                HStack {
+                    Button("Save Logs") { model.pullLogs() }
+                    Button("Show in Finder") {
+                        if let f = exchange.lastFolder { NSWorkspace.shared.activateFileViewerSelecting([f]) }
+                    }
+                    .disabled(exchange.lastFolder == nil)
+                }
+                if let s = exchange.status {
+                    Text(s).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            } header: {
+                Text("Save to file")
+            } footer: {
+                Text("Saves this Mac’s log to ~/Library/Logs/KMctrl and fetches the other Mac’s over the open session (both Macs need 0.8.24 or later). Keystrokes and clipboard contents are never logged.")
             }
 
             Section {
