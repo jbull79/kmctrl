@@ -142,11 +142,11 @@ struct HandoffLayout: Equatable {
         portals.firstIndex { $0.displayID == displayID && $0.edge == edge }
     }
 
-    /// The first stretch of the edge the screen was dropped on (what v4 peers know about).
+    /// The first stretch of the edge the screen was dropped on.
     var anchorPortal: Int? { portal(on: anchorID, edge: edge) }
 
-    /// The portal a return came back through: the zone the other Mac named (v5), else the
-    /// anchor edge (all a v4 Mac knows), else the first. nil when nothing leads across.
+    /// The portal a return came back through: the zone the other Mac named, else (an unknown
+    /// zone) the anchor edge, else the first. nil when nothing leads across.
     func returnPortal(zone: Int?) -> Int? {
         if let zone, portals.indices.contains(zone) { return zone }
         return anchorPortal ?? (portals.isEmpty ? nil : 0)

@@ -5,7 +5,6 @@ import Security
 /// All cryptography: a stable identity key for fingerprints, ephemeral ECDH for
 /// per-session AES-GCM keys, plus AES-GCM seal/open and SHA-256 helpers.
 enum CryptoService {
-    private static let identityKeyDefaultsKey = "kmctrl.identitySigningKey"   // legacy (migrated to Keychain)
     private static let keychainService = "com.kmctrl.identity"
     private static let keychainAccount = "identitySigningKey"
     private static let hkdfSalt = Data("NetCatch-v1-salt".utf8)
@@ -48,13 +47,6 @@ enum CryptoService {
             // identity, so every paired Mac had to pair again.
             DebugLog.log("identity: Keychain read failed (\(status)) — using a temporary identity until KMctrl restarts", .error)
             return Curve25519.Signing.PrivateKey()
-        }
-        // One-time migration from the earlier UserDefaults storage.
-        if let raw = UserDefaults.standard.data(forKey: identityKeyDefaultsKey),
-           let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw) {
-            keychainSave(raw)
-            UserDefaults.standard.removeObject(forKey: identityKeyDefaultsKey)
-            return key
         }
         let key = Curve25519.Signing.PrivateKey()
         keychainSave(key.rawRepresentation)

@@ -6,7 +6,7 @@ import Foundation
 struct LogBundle: Codable, Equatable {
     /// The sending Mac's name for itself.
     var device: String
-    /// KMctrl version and build, e.g. "0.8.24 (38)".
+    /// KMctrl version and build, e.g. "1.0 (39)".
     var app: String
     var os: String
     /// When it was written, seconds since 1970 by the sender's clock.

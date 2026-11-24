@@ -124,20 +124,6 @@ struct SettingsView: View {
             } footer: {
                 Text("Posts a harmless F15 keystroke every few minutes so this Mac stays marked active in Teams/Slack. Local only; nothing is sent to another Mac. Needs Accessibility — a managed (MDM) Mac may block it.")
             }
-            Section {
-                ForEach(TransportStrategy.allCases, id: \.self) { s in
-                    Toggle(isOn: Binding(
-                        get: { settings.isTransportEnabled(s) },
-                        set: { settings.setTransport(s, enabled: $0) })) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(s.label)
-                            Text(s.detail).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } header: {
-                Text("Connection methods")
-            }
         }
         .formStyle(.grouped)
     }
@@ -239,24 +225,10 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Binary control protocol", isOn: $settings.binaryControl)
-                Picker("Mouse flush interval", selection: $settings.flushIntervalMs) {
-                    ForEach(AppSettings.flushIntervalChoices, id: \.self) { ms in
-                        Text("\(ms) ms").tag(ms)
-                    }
-                }
-                .pickerStyle(.segmented)
-            } header: {
-                Text("Experimental — input latency")
-            } footer: {
-                Text("Binary protocol encodes forwarded input as compact binary instead of JSON (removes per-event encode/decode cost). It's self-describing on the wire, so you only need it on the Mac doing the controlling. Flush interval sets how often coalesced mouse moves are sent — lower is smoother but more packets. Both take effect on the next connection: reconnect after changing them to A/B the feel.")
-            }
-
-            Section {
-                Toggle("Switch to the other Mac at the screen edge", isOn: $settings.edgeHandoffSpike)
+                Toggle("Switch to the other Mac at the screen edge", isOn: $settings.pointerEdgeSwitch)
                 Toggle("Return control at the other Mac's edge", isOn: $settings.returnAtEdge)
             } header: {
-                Text("Experimental — edge switching without permissions")
+                Text("Edge switching without permissions")
             } footer: {
                 Text("Uses the edge from the arrangement above. Rest the pointer on that edge for a moment to take control; on the other Mac, push past the opposite edge to come back (never while a button is held). Needs no Accessibility or Input Monitoring on this Mac. Takes effect on the next connection. If macOS won't give KMctrl focus, the switch is skipped and noted in Diagnostics.")
             }

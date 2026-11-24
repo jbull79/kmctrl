@@ -29,14 +29,4 @@ final class MediaKeyTests: XCTestCase {
         XCTAssertFalse(MediaKey.forwarded.contains(10))  // NX_POWER_KEY — never forward power
         XCTAssertFalse(MediaKey.forwarded.contains(6))   // NX_KEYTYPE_EJECT — never eject remotely
     }
-
-    func testMediaKeyWireByte() {
-        XCTAssertEqual(ControlEventKind.mediaKey.wireByte, 10)
-        XCTAssertEqual(ControlEventKind(wireByte: 10), .mediaKey)
-    }
-
-    func testWakeDisplayWireByte() {
-        XCTAssertEqual(ControlEventKind.wakeDisplay.wireByte, 11)
-        XCTAssertEqual(ControlEventKind(wireByte: 11), .wakeDisplay)
-    }
 }

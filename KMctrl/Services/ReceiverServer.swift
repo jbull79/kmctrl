@@ -5,8 +5,8 @@ import Darwin
 /// Always-on listener that advertises this device over Bonjour and hands off each
 /// incoming connection. It accepts over a raw POSIX socket (kernel routing, so replies
 /// go out the physical LAN interface even when a VPN is up — like `nc`), and advertises
-/// the service with `NetService`. If the POSIX socket can't bind, it falls back to an
-/// `NWListener`.
+/// the service with `NetService`. Control replies are written synchronously to that socket, so
+/// there is no other listener.
 @MainActor
 final class ReceiverServer: ObservableObject {
     @Published var isRunning = false
@@ -21,23 +21,21 @@ final class ReceiverServer: ObservableObject {
     /// Bound on concurrent inbound connections (anti-DoS); shared with the accept thread.
     private let inbound = InboundLimiter(maximum: 24)
 
-    // NWListener fallback
-    private var nwListener: NWListener?
-
     /// Called (on the main actor) for every new inbound connection.
     var onIncoming: ((PeerLink) -> Void)?
 
     func start(serviceName: String, port: UInt16) {
         stop()
-        if startPOSIX(serviceName: serviceName, port: port) { return }
-        DebugLog.log("listener: POSIX bind failed, falling back to NWListener", .warn)
-        startNW(serviceName: serviceName, port: port)
+        guard startPOSIX(serviceName: serviceName, port: port) else {
+            DebugLog.log("listener: couldn't listen on port \(port)", .error)
+            lastError = "Couldn’t listen on port \(port). Another app may be using it; pick another port in Settings."
+            return
+        }
     }
 
     func stop() {
         if listenFD >= 0 { shutdown(listenFD, SHUT_RDWR); Darwin.close(listenFD); listenFD = -1 }
         advertiser?.stop(); advertiser = nil
-        nwListener?.cancel(); nwListener = nil
         isRunning = false
     }
 
@@ -110,45 +108,5 @@ final class ReceiverServer: ObservableObject {
         service.publish()
         advertiser = service
         return true
-    }
-
-    // MARK: - NWListener (fallback)
-
-    private func startNW(serviceName: String, port: UInt16) {
-        do {
-            let params = NWParameters.tcp
-            params.prohibitedInterfaceTypes = [.other]
-            let listener: NWListener
-            if let nwPort = NWEndpoint.Port(rawValue: port) {
-                listener = try NWListener(using: params, on: nwPort)
-            } else {
-                listener = try NWListener(using: params)
-            }
-            listener.service = NWListener.Service(name: serviceName, type: serviceType)
-            listener.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .ready: DebugLog.log("listener: NW ready on port \(port) as '\(serviceName)'")
-                case .failed(let error): DebugLog.log("listener: NW failed — \(error)", .error)
-                default: break
-                }
-                Task { @MainActor in
-                    switch state {
-                    case .ready: self?.isRunning = true
-                    case .failed(let error): self?.isRunning = false; self?.lastError = error.localizedDescription
-                    case .cancelled: self?.isRunning = false
-                    default: break
-                    }
-                }
-            }
-            listener.newConnectionHandler = { [weak self] connection in
-                DebugLog.log("listener: incoming NW connection from \(connection.endpoint)")
-                Task { @MainActor in self?.onIncoming?(PeerLink(connection: connection)) }
-            }
-            listener.start(queue: .main)
-            nwListener = listener
-        } catch {
-            lastError = error.localizedDescription
-            isRunning = false
-        }
     }
 }

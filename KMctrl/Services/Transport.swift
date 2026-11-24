@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import Darwin
 
 /// A bidirectional byte stream. The transfer protocol (handshake, framing, encryption)
@@ -55,39 +54,6 @@ extension ByteStream {
         guard length <= maxBytes else { throw LinkError.malformed }
         return try await receiveExact(Int(length))
     }
-}
-
-// MARK: - Network.framework transport
-
-/// A `ByteStream` backed by an `NWConnection` (Apple's stack). Used both for outbound
-/// strategies and for connections accepted by the NWListener fallback.
-final class NWByteStream: ByteStream, @unchecked Sendable {
-    let connection: NWConnection
-    init(_ connection: NWConnection) { self.connection = connection }
-
-    func open() async throws { try await connection.startAndWaitReady() }
-
-    func sendBytes(_ data: Data) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.send(content: data, completion: .contentProcessed { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
-            })
-        }
-    }
-
-    func receiveBytes(max: Int) async throws -> Data {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: max) { data, _, _, error in
-                if let error { cont.resume(throwing: error); return }
-                if let data, !data.isEmpty { cont.resume(returning: data); return }
-                cont.resume(throwing: LinkError.closed)
-            }
-        }
-    }
-
-    func setReadTimeout(_ seconds: TimeInterval) { /* NW is event-driven; no thread to reap */ }
-
-    func close() { connection.cancel() }
 }
 
 // MARK: - POSIX / BSD socket transport

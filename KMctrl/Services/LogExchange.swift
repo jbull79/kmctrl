@@ -50,13 +50,13 @@ final class LogExchange: ObservableObject {
         waiting = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(LogRequestPolicy.answerWindow * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
-            self.status = "No log came back from \(peer). Both Macs need KMctrl 0.8.24 or later and an open session."
+            self.status = "No log came back from \(peer)."
         }
     }
 
-    /// Nothing to ask: no session, or the other Mac is on an older KMctrl.
+    /// Nothing to ask: no session.
     func noPeer() {
-        status = (status.map { $0 + " " } ?? "") + "No session with a Mac on KMctrl 0.8.24 or later, so only this Mac’s log was saved."
+        status = (status.map { $0 + " " } ?? "") + "No open session, so only this Mac’s log was saved."
     }
 
     /// The other Mac's log arrived.

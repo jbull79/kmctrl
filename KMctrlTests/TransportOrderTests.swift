@@ -3,28 +3,6 @@ import Network
 @testable import KMctrl
 
 final class TransportOrderTests: XCTestCase {
-    /// Control frames can only be written to a raw socket, so a control link must never be
-    /// opened over Network.framework — not even when a fallback was cached as last-known-good
-    /// (that produced "connected", then an instant drop on Start controlling).
-    func testCachedFallbackCannotHijackAControlLink() {
-        let order = TransportConnector.attemptOrder(allowed: ControlHost.controlTransports,
-                                                    preferred: .nwProhibitOther)
-        XCTAssertEqual(order, [.posix])
-    }
-
-    func testControlIsRawSocketOnly() {
-        XCTAssertEqual(ControlHost.controlTransports, [.posix])
-    }
-
-    func testOtherSessionsStillTryLastKnownGoodFirst() {
-        let order = TransportConnector.attemptOrder(allowed: Set(TransportStrategy.allCases), preferred: .nwDefault)
-        XCTAssertEqual(order, [.nwDefault, .posix, .nwProhibitOther])
-    }
-
-    func testEmptyAllowedSetFallsBackToEverything() {
-        XCTAssertEqual(TransportConnector.attemptOrder(allowed: [], preferred: nil), TransportStrategy.allCases)
-    }
-
     // MARK: Finding the other Mac
 
     /// A control link needs the raw socket, so it can't start without the address. The lookup
@@ -40,8 +18,7 @@ final class TransportOrderTests: XCTestCase {
         let peer = Peer.bonjour(endpoint: .service(name: "kmctrl-test-\(UUID().uuidString)", type: "_kmctrl._tcp",
                                                    domain: "local.", interface: nil))
         do {
-            _ = try await TransportConnector.shared.connect(to: peer, localName: "test",
-                                                            allowed: ControlHost.controlTransports, lookupLimit: 0.2)
+            _ = try await TransportConnector.shared.connect(to: peer, localName: "test", lookupLimit: 0.2)
             XCTFail("connected to a Mac that doesn't exist")
         } catch LinkError.addressNotFound(let name) {
             XCTAssertEqual(name, peer.name)
@@ -63,7 +40,7 @@ final class TransportOrderTests: XCTestCase {
         }
         let peer = try XCTUnwrap(Peer.manual(host: "127.0.0.1", port: 9))
 
-        _ = try? await connector.connect(to: peer, localName: "test", allowed: ControlHost.controlTransports)
+        _ = try? await connector.connect(to: peer, localName: "test")
 
         XCTAssertTrue(called.value)
         XCTAssertFalse(onMain.value)

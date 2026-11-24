@@ -94,20 +94,10 @@ final class AppModel: ObservableObject {
         LocalNetwork.startTrackingInterfaceOrder()   // follow macOS's interface ranking from launch
         SystemEventLog.shared.start()   // sleep, wake and network changes, for Diagnostics
         manager.startServices()
-        adoptHandoffIdentity()
         urlCommands.install { [weak self] in self?.pullLogs() }
         applyActivationPolicy()
         if settings.keepAwakeEnabled { keepAwake.start() }
         updates.start()
-    }
-
-    /// An arrangement saved by 0.8.23 or earlier knows only the display number: remember which
-    /// monitor that is now, so the arrangement survives macOS renumbering it later.
-    private func adoptHandoffIdentity() {
-        guard let identity = HandoffAnchor.adopt(saved: settings.handoffDisplayIdentity, savedID: settings.handoffDisplayID,
-                                                 among: HandoffMonitor.current()) else { return }
-        DebugLog.log("arrangement: the other Mac sits beside \(identity.name.isEmpty ? "display \(settings.handoffDisplayID)" : identity.name)")
-        settings.handoffDisplayIdentity = identity
     }
 
     private let urlCommands = URLCommands()

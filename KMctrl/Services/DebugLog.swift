@@ -31,9 +31,20 @@ final class DebugLog: ObservableObject {
 
     private init() { enabled = UserDefaults.standard.bool(forKey: Self.key) }
 
-    private static let stamp: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f
-    }()
+    /// Saved and copied logs span days and get read next to the other Mac's, so each line carries
+    /// the date, a 24-hour time (whatever the user's clock setting) and the time zone.
+    static func stampFormatter(_ zone: TimeZone) -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = zone
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS xx"
+        return f
+    }
+    private static let stamp = stampFormatter(.current)
+
+    static func line(_ e: Entry, formatter: DateFormatter? = nil) -> String {
+        "\((formatter ?? stamp).string(from: e.time))  [\(e.level.rawValue.uppercased())]  \(e.message)"
+    }
 
     /// Safe to call from any context. No-op unless diagnostics are enabled.
     nonisolated static func log(_ message: String, _ level: Level = .info) {
@@ -71,7 +82,6 @@ final class DebugLog: ObservableObject {
 
     func transcript() -> String {
         flush()
-        return entries.map { "\(Self.stamp.string(from: $0.time))  [\($0.level.rawValue.uppercased())]  \($0.message)" }
-            .joined(separator: "\n")
+        return entries.map { Self.line($0) }.joined(separator: "\n")
     }
 }

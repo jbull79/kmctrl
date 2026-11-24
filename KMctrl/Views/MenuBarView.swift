@@ -36,7 +36,6 @@ struct MenuBarView: View {
 
             if host.state == .connected || host.state == .capturing {
                 Button("Wake \(host.peerName ?? "remote") screen") { host.wakeRemoteDisplay() }
-                    .disabled(host.peerVersion < 2)
             }
 
             Divider()

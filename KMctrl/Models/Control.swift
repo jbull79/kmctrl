@@ -16,11 +16,11 @@ enum ControlEventKind: String, Codable {
     case ping         // host→client latency probe; client echoes dx (host timestamp) in ControlReturn.pong; not injected
     case mediaKey     // host→client media/aux key (keyCode = NX key type, button = 1 down / 0 up); protocol v2
     case wakeDisplay  // host→client: wake a sleeping display (IOPM user activity); not injected; protocol v2
-    case clipboard    // host→client clipboard hand-off (payload in `clipboard`); JSON only; protocol v2
+    case clipboard    // host→client clipboard hand-off (payload in `clipboard`); protocol v2
     case enterAt      // host→client: edge switch entered here (dx, dy = controlled Mac's global points); protocol v4
-    case edgeSetup    // host→client: updated return edge/stretch after a monitor change (payload in `setup`); JSON only; protocol v4
+    case edgeSetup    // host→client: updated return edge/stretch after a monitor change (payload in `setup`); protocol v4
     case logRequest   // host→client: send me your diagnostics log (answered in ControlReturn.log); protocol v6
-    case log          // host→client: this Mac's diagnostics log, asked for by ControlReturn.logRequest (payload in `log`); JSON only; protocol v6
+    case log          // host→client: this Mac's diagnostics log, asked for by ControlReturn.logRequest (payload in `log`); protocol v6
 }
 
 /// Which screen edge of the controller hands off to the other Mac.
@@ -42,8 +42,8 @@ enum ScreenEdge: String, Codable, CaseIterable, Identifiable {
 struct ControlAck: Codable {
     var accepted: Bool
     var reason: String = ""
-    /// Control protocol version the controlled Mac speaks. Absent from 0.7.x peers → 1.
-    /// The host only sends v2 features (`chars`, `.mediaKey`, `.wakeDisplay`) when ≥ 2.
+    /// Control protocol version the controlled Mac speaks. Absent from 0.7.x peers → 1, which
+    /// the controller refuses (see `SessionHello.minimumControlVersion`).
     var version: Int = 1
     /// The controlled Mac's main display (v4), so the controller can line up the edge switch.
     var screen: ScreenGeometry? = nil
@@ -68,14 +68,11 @@ struct ControlSetup: Codable {
     /// Window (click-to-capture) mode must NOT — otherwise dragging to a screen edge
     /// silently drops control. Defaults false so older hosts don't arm auto-return.
     var autoReturn: Bool = false
-    /// v4: the controlled Mac's display that faces the controller, and the stretch of its facing
-    /// edge (its points, along the edge) that touches the controller's screen. Return only fires
-    /// there. Absent → the whole desktop edge, as before.
+    /// The controlled Mac's display that faces the controller (its points); returns are watched
+    /// inside it. Absent → the whole desktop.
     var returnArea: ScreenGeometry? = nil
-    var returnSpan: [Double]? = nil
-    /// v5: every way back — one zone per stretch of the controller's monitor edges that leads to
-    /// the controlled Mac. Absent (older controller) → the single `hostEdge`/`returnSpan` above,
-    /// which a v5 controller still fills from its anchor edge for older controlled Macs.
+    /// Every way back: one zone per stretch of the controller's monitor edges that leads to the
+    /// controlled Mac. None → the whole side opposite `hostEdge`, so control can always come back.
     var returnZones: [ReturnZone]? = nil
     /// v5: the controller's monitors and where the controlled Mac sits among them, shown
     /// read-only on the controlled Mac. Sanitised before use.
@@ -103,8 +100,8 @@ struct ControlReturn: Codable {
     var at: [Double]? = nil
     /// v4: the controlled Mac's screen, re-sent when its monitors change (never a return).
     var screen: ScreenGeometry? = nil
-    /// v5: which of the setup's `returnZones` the pointer pushed through on a return, so the
-    /// controller lands on the matching monitor. Absent → the anchor edge.
+    /// Which of the setup's `returnZones` the pointer pushed through on a return, so the
+    /// controller lands on the matching monitor. Absent or unknown → the anchor edge.
     var zone: Int? = nil
     /// v6: the controlled Mac's diagnostics log, answering a `.logRequest` (never a return).
     var log: LogBundle? = nil
@@ -129,20 +126,16 @@ struct ControlEvent: Codable {
     var scrollY: Double = 0
     var keyCode: Int = 0         // virtual keycode
     var flags: UInt64 = 0        // CGEventFlags raw (modifier state)
-    /// Typed characters for a `.keyDown` (layout-independent typing, protocol v2). nil =
-    /// keycode only. Omitted from JSON when nil so plain frames stay byte-identical to 0.7.x.
+    /// Typed characters for a `.keyDown` (layout-independent typing). nil = keycode only.
+    /// Omitted from JSON when nil, keeping plain frames small.
     var chars: String? = nil
-    /// Clipboard hand-off payload for `.clipboard` events. JSON only — such an event is never
-    /// binary-encoded (`isBinaryEncodable`), whatever the sender's codec flag.
+    /// Clipboard hand-off payload for `.clipboard` events.
     var clipboard: ClipboardPayload? = nil
-    /// Updated return setup for `.edgeSetup` events (v4). JSON only, like `clipboard`.
+    /// Updated return setup for `.edgeSetup` events (v4).
     var setup: ControlSetup? = nil
-    /// The controller's diagnostics log for `.log` events (v6). JSON only, like `clipboard`.
+    /// The controller's diagnostics log for `.log` events (v6).
     var log: LogBundle? = nil
 
-    var isBinaryEncodable: Bool {
-        kind != .clipboard && kind != .edgeSetup && kind != .log && clipboard == nil && setup == nil && log == nil
-    }
 
     enum CodingKeys: String, CodingKey { case kind, dx, dy, button, scrollX, scrollY, keyCode, flags, chars, clipboard, setup, log }
 
@@ -161,88 +154,5 @@ struct ControlEvent: Codable {
         try c.encodeIfPresent(clipboard, forKey: .clipboard)
         try c.encodeIfPresent(setup, forKey: .setup)
         try c.encodeIfPresent(log, forKey: .log)
-    }
-}
-
-// MARK: - Binary wire codec (feature-flagged fast path)
-
-/// Thrown when a binary control frame is the wrong size or names an unknown kind.
-enum ControlCodecError: Error { case malformed }
-
-extension ControlEventKind {
-    /// Stable 1-byte wire codes for the binary codec. APPEND-ONLY — never reorder or
-    /// remove, or you break decoding of frames from other app versions.
-    static let wireOrder: [ControlEventKind] = [
-        .mouseMove, .mouseDown, .mouseUp, .scroll,
-        .keyDown, .keyUp, .flagsChanged, .releaseAll, .hostStats, .ping,
-        .mediaKey, .wakeDisplay, .clipboard, .enterAt, .edgeSetup, .logRequest, .log
-    ]
-    var wireByte: UInt8 { UInt8(ControlEventKind.wireOrder.firstIndex(of: self) ?? 0) }
-    init?(wireByte: UInt8) {
-        let i = Int(wireByte)
-        guard i < ControlEventKind.wireOrder.count else { return nil }
-        self = ControlEventKind.wireOrder[i]
-    }
-}
-
-private func appendBE<T: FixedWidthInteger>(_ data: inout Data, _ value: T) {
-    var be = value.bigEndian
-    withUnsafeBytes(of: &be) { data.append(contentsOf: $0) }
-}
-
-private func readBE<T: FixedWidthInteger>(_ bytes: [UInt8], _ offset: Int, _: T.Type) -> T {
-    var v: T = 0
-    for i in 0..<MemoryLayout<T>.size { v = (v << 8) | T(bytes[offset + i]) }
-    return v
-}
-
-extension ControlEvent {
-    /// Fixed 44-byte layout (big-endian; Doubles as their IEEE-754 bit pattern):
-    /// kind[1] button[1] keyCode[2] flags[8] dx[8] dy[8] scrollX[8] scrollY[8],
-    /// followed by an optional trailer `charsLen[1] chars[charsLen]` (UTF-8,
-    /// ≤ `KeyCharacters.maxBytes`) when `chars` is set. Exactly 44 bytes = legacy frame.
-    static let binarySize = 44
-
-    /// Encode without JSON reflection or per-event heap churn — the whole point of the
-    /// binary control flag. Paired with `init(binary:)`; round-trip is exact.
-    func encodedBinary() -> Data {
-        var d = Data(capacity: ControlEvent.binarySize + 1 + KeyCharacters.maxBytes)
-        d.append(kind.wireByte)
-        d.append(UInt8(truncatingIfNeeded: button))
-        appendBE(&d, UInt16(truncatingIfNeeded: keyCode))
-        appendBE(&d, flags)
-        appendBE(&d, dx.bitPattern)
-        appendBE(&d, dy.bitPattern)
-        appendBE(&d, scrollX.bitPattern)
-        appendBE(&d, scrollY.bitPattern)
-        if let chars {
-            let utf8 = Array(chars.utf8)
-            if !utf8.isEmpty, utf8.count <= KeyCharacters.maxBytes {
-                d.append(UInt8(utf8.count)); d.append(contentsOf: utf8)
-            }
-        }
-        return d
-    }
-
-    init(binary data: Data) throws {
-        guard data.count >= ControlEvent.binarySize else { throw ControlCodecError.malformed }
-        let b = [UInt8](data)
-        guard let kind = ControlEventKind(wireByte: b[0]) else { throw ControlCodecError.malformed }
-        self.init(kind: kind)
-        button  = Int(b[1])
-        keyCode = Int(readBE(b, 2, UInt16.self))
-        flags   = readBE(b, 4, UInt64.self)
-        dx      = Double(bitPattern: readBE(b, 12, UInt64.self))
-        dy      = Double(bitPattern: readBE(b, 20, UInt64.self))
-        scrollX = Double(bitPattern: readBE(b, 28, UInt64.self))
-        scrollY = Double(bitPattern: readBE(b, 36, UInt64.self))
-        if b.count > ControlEvent.binarySize {
-            let len = Int(b[ControlEvent.binarySize])
-            guard len > 0, len <= KeyCharacters.maxBytes,
-                  b.count == ControlEvent.binarySize + 1 + len,
-                  let s = String(bytes: b[(ControlEvent.binarySize + 1)...], encoding: .utf8)
-            else { throw ControlCodecError.malformed }
-            chars = s
-        }
     }
 }

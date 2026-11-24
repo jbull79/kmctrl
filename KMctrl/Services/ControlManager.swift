@@ -64,8 +64,6 @@ final class ControlManager: ObservableObject {
     /// The link of the active inbound control session, so this Mac can end it (and hand
     /// its clipboard back over it).
     private(set) var controlledLink: PeerLink?
-    /// The controlling Mac's protocol version on `controlledLink`.
-    private var controlledHostVersion = 1
     /// On-screen "being controlled" badge (+ kill switch) shown while a remote drives us.
     private let badge = ControlBadgeController()
     /// Re-reports this Mac's screen to the controller when monitors change mid-session.
@@ -103,12 +101,7 @@ final class ControlManager: ObservableObject {
     func restartServices() {
         receiver.stop()
         discovery.stop()
-        TransportConnector.shared.resetCache()
         startServices()
-    }
-
-    func setDiscoverable(_ on: Bool) {
-        if on { startServices() } else { receiver.stop(); discovery.stop() }
     }
 
     // MARK: Network rebind
@@ -150,15 +143,19 @@ final class ControlManager: ObservableObject {
                 link.stream.setReadTimeout(0)
                 DebugLog.log("incoming: \(hello.kind.rawValue) from \(link.remoteName) fp=\(link.remoteFingerprint)")
                 switch hello.kind {
-                case .status:
-                    let trusted = self.trust.isTrusted(link.remoteFingerprint)
-                    try await link.sendSecureObject(self.localStatusReport(trusted: trusted))
-                    link.cancel()
                 case .control:
                     // Master switch off → refuse outright.
                     guard self.settings.controlEnabled else {
                         try await link.sendSecureObject(ControlAck(
                             accepted: false, reason: "Control is turned off on \(self.settings.deviceName)",
+                            version: SessionHello.currentControlVersion))
+                        link.cancel(); return
+                    }
+                    // Too old to run a session with: say so before any approval prompt.
+                    guard SessionHello.isSupported(controlVersion: hello.version) else {
+                        DebugLog.log("incoming: refused control from \(link.remoteName) — it speaks protocol v\(hello.version), v\(SessionHello.minimumControlVersion) or later needed", .warn)
+                        try await link.sendSecureObject(ControlAck(
+                            accepted: false, reason: SessionHello.olderControllerReason(thisMac: self.settings.deviceName),
                             version: SessionHello.currentControlVersion))
                         link.cancel(); return
                     }
@@ -187,9 +184,7 @@ final class ControlManager: ObservableObject {
                     }
                     if !self.trust.isTrusted(fp) { self.trust.trust(fp, name: link.remoteName) }
                     link.setLowLatency()
-                    await self.runControlReceive(link: link, hostVersion: hello.version)
-                default:
-                    link.cancel()
+                    await self.runControlReceive(link: link)
                 }
             } catch {
                 DebugLog.log("incoming: failed — \(error.localizedDescription)", .warn)
@@ -198,18 +193,17 @@ final class ControlManager: ObservableObject {
         }
     }
 
-    private func runControlReceive(link: PeerLink, hostVersion: Int) async {
+    private func runControlReceive(link: PeerLink) async {
         let name = link.remoteName
         let replaced = Self.replacesSession(of: controlledLink?.remoteFingerprint, with: link.remoteFingerprint) ? controlledLink : nil
         controlActiveFrom = name
         controlledLink = link
-        controlledHostVersion = hostVersion
         replaced?.cancel()      // lets go of anything its dead session left held down
         badge.show(controller: name) { [weak self] in self?.disconnectControlled() }
         clipboard.setActive(true, sessionFingerprint: link.remoteFingerprint)
         DebugLog.log("control: session started from \(name)")
         let injector = ControlInjector()
-        screens.start { [weak self] in self?.screensChanged(link: link, injector: injector, hostVersion: hostVersion) }
+        screens.start { [weak self] in self?.screensChanged(link: link, injector: injector) }
         await Task.detached(priority: .userInitiated) {
             injector.start()
             defer { injector.stop() }
@@ -232,15 +226,14 @@ final class ControlManager: ObservableObject {
                         continue
                     }
                     if event.kind == .hostStats { continue }
-                    if event.kind == .logRequest {          // the controller wants our log (v6)
-                        guard ControlHost.sendsLogRequest(peerVersion: hostVersion) else { continue }
+                    if event.kind == .logRequest {          // the controller wants our log
                         Task { @MainActor in
                             guard let log = LogExchange.shared.answer(to: name) else { return }
                             Task.detached { _ = link.sendSecureObjectSync(ControlReturn(log: log)) }   // big: off the main thread
                         }
                         continue
                     }
-                    if event.kind == .log {                 // the controller's log, which we asked for (v6)
+                    if event.kind == .log {                 // the controller's log, which we asked for
                         if let log = event.log { Task { @MainActor in LogExchange.shared.received(log, from: name) } }
                         continue
                     }
@@ -258,9 +251,8 @@ final class ControlManager: ObservableObject {
                         }
                         continue
                     }
-                    if event.kind == .releaseAll, hostVersion >= 3 {
-                        // Control is going back: hand our clipboard to the controller over this link
-                        // (v3 hosts only — older ones would read it as a return-of-control signal).
+                    if event.kind == .releaseAll {
+                        // Control is going back: hand our clipboard to the controller over this link.
                         Task { @MainActor [weak self] in self?.clipboard.pushNow(reason: "control released") }
                     }
                     injector.apply(event)
@@ -287,10 +279,9 @@ final class ControlManager: ObservableObject {
     }
 
     /// Ask the controlling Mac for its diagnostics log (it comes back as a `.log` event). False
-    /// when nothing controls this Mac or the controller is too old to answer — a v5 one would
-    /// read the request as a return of control.
+    /// when nothing controls this Mac.
     func requestPeerLog() -> Bool {
-        guard let link = controlledLink, ControlHost.sendsLogRequest(peerVersion: controlledHostVersion) else { return false }
+        guard let link = controlledLink else { return false }
         Task.detached { _ = link.sendSecureObjectSync(ControlReturn(logRequest: true)) }
         return true
     }
@@ -307,36 +298,16 @@ final class ControlManager: ObservableObject {
     }
 
     /// Monitors changed while being controlled: keep the cursor inside the new desktop, and tell
-    /// a v4 controller our new screen so it can re-line the hand-off edge up (older ones would
-    /// read the report as a return of control).
-    private func screensChanged(link: PeerLink, injector: ControlInjector, hostVersion: Int) {
+    /// the controller our new screen so it can re-line the hand-off edge up.
+    private func screensChanged(link: PeerLink, injector: ControlInjector) {
         guard controlledLink === link else { return }
         injector.refreshDesktop()
         let screen = ScreenGeometry.mainDisplay()
-        guard hostVersion >= 4, screen != reportedScreen else { return }
+        guard screen != reportedScreen else { return }
         reportedScreen = screen
         DebugLog.log(String(format: "control: screen changed — now %.0f×%.0f pt, %.0f×%.0f mm; telling the controller",
                             screen.width, screen.height, screen.widthMM, screen.heightMM))
         Task.detached { _ = link.sendSecureObjectSync(ControlReturn(screen: screen)) }   // never block the main thread on the socket
-    }
-
-    // MARK: Status
-
-    func localStatusReport(trusted: Bool = true) -> StatusReport {
-        readiness.refresh()
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        guard trusted else {
-            return StatusReport(deviceName: settings.deviceName, appVersion: version,
-                                control: false, controlAccessibility: false,
-                                controlInputMonitoring: false, controlEventTap: false,
-                                workbook: false, clipboard: false)
-        }
-        return StatusReport(deviceName: settings.deviceName, appVersion: version,
-                            control: readiness.allReady,
-                            controlAccessibility: readiness.accessibility,
-                            controlInputMonitoring: readiness.inputMonitoring,
-                            controlEventTap: readiness.eventTapCreatable,
-                            workbook: false, clipboard: settings.clipboardSyncEnabled)
     }
 
     private func requestControlApproval(name: String, fingerprint: String) async -> Bool {
@@ -364,18 +335,5 @@ final class ControlManager: ObservableObject {
         let req = pendingControlRequest
         pendingControlRequest = nil
         req?.resolve(accepted)
-    }
-
-    func queryStatus(of peer: Peer) async -> StatusReport? {
-        do {
-            let link = try await TransportConnector.shared.connect(to: peer, localName: settings.deviceName,
-                                                                   allowed: settings.enabledTransportStrategies)
-            defer { link.cancel() }
-            try await link.sendSecureObject(SessionHello(kind: .status))
-            return try await link.receiveSecureObject(StatusReport.self)
-        } catch {
-            DebugLog.log("status: query to '\(peer.name)' failed — \(error.localizedDescription)", .warn)
-            return nil
-        }
     }
 }

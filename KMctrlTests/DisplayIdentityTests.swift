@@ -42,19 +42,8 @@ final class DisplayIdentityTests: XCTestCase {
         XCTAssertEqual(HandoffAnchor.resolve(saved: twin, savedID: 9, among: now), 4)
     }
 
-    func testAnArrangementSavedBeforeIdentitiesFallsBackToTheNumber() {
-        let now = [monitor(1, samsung), monitor(3, dell)]
-        XCTAssertEqual(HandoffAnchor.resolve(saved: nil, savedID: 3, among: now), 3)
-        XCTAssertNil(HandoffAnchor.resolve(saved: nil, savedID: 8, among: now))
-        XCTAssertNil(HandoffAnchor.resolve(saved: nil, savedID: 0, among: now))
-    }
-
-    func testAnOldArrangementAdoptsTheIdentityOfItsMonitorOnce() {
-        let now = [monitor(1, samsung), monitor(3, dell)]
-        XCTAssertEqual(HandoffAnchor.adopt(saved: nil, savedID: 3, among: now), dell)
-        XCTAssertNil(HandoffAnchor.adopt(saved: nil, savedID: 8, among: now))   // not connected: wait
-        XCTAssertNil(HandoffAnchor.adopt(saved: dell, savedID: 3, among: now))  // already has one
-        XCTAssertNil(HandoffAnchor.adopt(saved: nil, savedID: 0, among: now))   // never set
+    func testNothingPlacedYetMeansTheMainDisplay() {
+        XCTAssertNil(HandoffAnchor.resolve(saved: nil, savedID: 3, among: [monitor(3, dell)]))
     }
 
     func testIdentityRoundTripsThroughSettingsJSON() throws {

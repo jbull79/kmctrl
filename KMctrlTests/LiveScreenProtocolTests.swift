@@ -17,29 +17,22 @@ final class LiveScreenProtocolTests: XCTestCase {
     }
 
     func testUpdatedReturnStretchTravelsAsJSON() throws {
-        let setup = ControlSetup(hostEdge: .top, autoReturn: true, returnArea: laptop, returnSpan: [0, 1512])
+        var setup = ControlSetup(hostEdge: .top, autoReturn: true, returnArea: laptop)
+        setup.returnZones = [ReturnZone(edge: .bottom, span: [0, 1512])]
         let e = ControlEvent(kind: .edgeSetup, setup: setup)
-        XCTAssertFalse(e.isBinaryEncodable)                       // payload can't ride the binary codec
         let back = try JSONDecoder().decode(ControlEvent.self, from: JSONEncoder().encode(e))
         XCTAssertEqual(back.kind, .edgeSetup)
-        XCTAssertEqual(back.setup?.returnSpan, [0, 1512])
+        XCTAssertEqual(back.setup?.returnZones, setup.returnZones)
         XCTAssertEqual(back.setup?.returnArea, laptop)
     }
 
     func testV5SetupCarriesEveryWayBackAndTheArrangement() throws {
-        var setup = ControlSetup(hostEdge: .top, autoReturn: true, returnArea: laptop, returnSpan: [0, 1512])
+        var setup = ControlSetup(hostEdge: .top, autoReturn: true, returnArea: laptop)
         setup.returnZones = Desk.layout().returnZones
         setup.arrangement = Desk.layout().snapshot()
         let back = try JSONDecoder().decode(ControlSetup.self, from: JSONEncoder().encode(setup))
         XCTAssertEqual(back.returnZones, setup.returnZones)
         XCTAssertEqual(back.arrangement, setup.arrangement)
-    }
-
-    func testV4SetupWithoutZonesStillDecodes() throws {
-        let json = Data(#"{"hostEdge":"top","autoReturn":true,"returnSpan":[0,10]}"#.utf8)
-        let setup = try JSONDecoder().decode(ControlSetup.self, from: json)
-        XCTAssertNil(setup.returnZones)
-        XCTAssertNil(setup.arrangement)
     }
 
     func testAReturnNamesItsZoneAndIsStillAReturn() throws {
@@ -58,11 +51,6 @@ final class LiveScreenProtocolTests: XCTestCase {
 /// Sliding the other screen or changing the edge in Settings applies to an open session.
 @MainActor
 final class LiveArrangementTests: XCTestCase {
-    func testOnlyV4PeersAreSentEdgeSetup() {
-        XCTAssertFalse(ControlHost.sendsEdgeSetup(peerVersion: 3))   // v3 drops the session on an unknown kind
-        XCTAssertTrue(ControlHost.sendsEdgeSetup(peerVersion: 4))
-    }
-
     func testIdleHostTakesTheNewArrangement() {
         let host = ControlHost()
         let dell = DisplayIdentity(uuid: "AAAA", vendor: 1, model: 2, serial: 3, name: "DELL")

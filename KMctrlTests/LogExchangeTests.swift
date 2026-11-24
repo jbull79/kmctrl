@@ -7,24 +7,8 @@ final class LogExchangeProtocolTests: XCTestCase {
     private let bundle = LogBundle(device: "Work Mac", app: "0.8.24 (38)", os: "Version 26.1", created: 1_800_000_000,
                                    diagnosticsOn: true, lines: "12:00:00.000  [INFO]  control: session started\n")
 
-    func testProtocolIsV6() {
-        XCTAssertEqual(SessionHello.currentControlVersion, 6)
-    }
-
-    func testOnlyV6PeersAreAskedOrAnswered() {
-        XCTAssertFalse(ControlHost.sendsLogRequest(peerVersion: 5))   // a v5 peer drops the session on the unknown kind
-        XCTAssertTrue(ControlHost.sendsLogRequest(peerVersion: 6))
-    }
-
-    func testLogKindsAreAppendedToTheWireOrder() {
-        let order = ControlEventKind.wireOrder
-        XCTAssertEqual(Array(order.suffix(2)), [.logRequest, .log])
-        XCTAssertEqual(order.firstIndex(of: .edgeSetup), 14)           // nothing before them moved
-    }
-
-    func testTheControllersLogTravelsAsJSONOnly() throws {
+    func testTheControllersLogRoundTrips() throws {
         let e = ControlEvent(kind: .log, log: bundle)
-        XCTAssertFalse(e.isBinaryEncodable)
         let back = try JSONDecoder().decode(ControlEvent.self, from: JSONEncoder().encode(e))
         XCTAssertEqual(back.kind, .log)
         XCTAssertEqual(back.log, bundle)
@@ -129,5 +113,16 @@ final class URLCommandTests: XCTestCase {
         XCTAssertFalse(URLCommands.isPullLogs("kmctrl://other"))
         XCTAssertFalse(URLCommands.isPullLogs("https://logs"))
         XCTAssertFalse(URLCommands.isPullLogs(""))
+    }
+}
+
+@MainActor
+final class DebugLogLineTests: XCTestCase {
+    func testLinesCarryTheDateA24HourClockAndTheZone() {
+        // A log covers days, and two Macs' logs get read side by side: date, zone and a 24-hour
+        // clock whatever the user's 12/24-hour setting.
+        let utc = DebugLog.stampFormatter(TimeZone(identifier: "UTC")!)
+        let e = DebugLog.Entry(time: Date(timeIntervalSince1970: 1_795_017_909.25), level: .warn, message: "network: down")
+        XCTAssertEqual(DebugLog.line(e, formatter: utc), "2026-11-18 16:05:09.250 +0000  [WARN]  network: down")
     }
 }

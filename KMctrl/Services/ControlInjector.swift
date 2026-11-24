@@ -20,9 +20,9 @@ final class ControlInjector: @unchecked Sendable {
 
     /// Where a deliberate push hands control back to the host (nil = never: window mode).
     private var returnWatch: ReturnWatch?
-    /// With where the pointer left and, for a v5 controller, which way back it took.
-    var onReturn: ((CGPoint, Int?) -> Void)?
-    /// v4: the display whose edges face the controller (nil = whole desktop).
+    /// With where the pointer left and which way back it took.
+    var onReturn: ((CGPoint, Int) -> Void)?
+    /// The display whose edges face the controller (nil = whole desktop).
     private var returnArea: CGRect?
 
     // Pacing
@@ -174,9 +174,8 @@ final class ControlInjector: @unchecked Sendable {
         // Return control after a deliberate push past a way back, never mid-drag.
         lock.lock()
         let zone = returnWatch?.check(cursor: cursor, intended: intended, bounds: returnArea ?? bounds, buttonHeld: mouseDown)
-        let reports = returnWatch?.reportsZone == true
         lock.unlock()
-        if let zone { onReturn?(cursor, reports ? zone : nil) }
+        if let zone { onReturn?(cursor, zone) }
     }
 
     // MARK: CGEvent helpers

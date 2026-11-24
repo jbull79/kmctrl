@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import CryptoKit
 
 enum LinkError: Error, LocalizedError {
@@ -26,45 +25,6 @@ enum LinkError: Error, LocalizedError {
     }
 }
 
-/// Brings an `NWConnection` to `.ready`. Still used by the Network.framework transport
-/// strategy and by Bonjour endpoint resolution.
-extension NWConnection {
-    func startAndWaitReady() async throws {
-        let endpointDesc = "\(self.endpoint)"
-        DebugLog.log("connect: starting → \(endpointDesc)")
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            self.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .preparing:
-                    DebugLog.log("connect: preparing → \(endpointDesc)")
-                case .ready:
-                    let ifaces = self?.currentPath?.availableInterfaces.map(\.name).joined(separator: ",") ?? "?"
-                    DebugLog.log("connect: ready (interfaces: \(ifaces))")
-                    self?.stateUpdateHandler = nil
-                    cont.resume()
-                case .waiting(let error):
-                    DebugLog.log("connect: waiting — \(error)", .warn)
-                    self?.stateUpdateHandler = nil
-                    self?.cancel()
-                    cont.resume(throwing: error)
-                case .failed(let error):
-                    DebugLog.log("connect: failed — \(error)", .error)
-                    self?.stateUpdateHandler = nil
-                    self?.cancel()
-                    cont.resume(throwing: error)
-                case .cancelled:
-                    DebugLog.log("connect: cancelled", .warn)
-                    self?.stateUpdateHandler = nil
-                    cont.resume(throwing: LinkError.closed)
-                default:
-                    break
-                }
-            }
-            self.start(queue: .global(qos: .userInitiated))
-        }
-    }
-}
-
 /// An encrypted, framed peer connection over any `ByteStream`. After `handshake()` all
 /// frames are AES-GCM sealed with the negotiated session key. Sendable so the control
 /// receive loop can run off the main actor (sessionKey/names are set once at handshake).
@@ -73,9 +33,6 @@ final class PeerLink: @unchecked Sendable {
     private(set) var sessionKey: SymmetricKey?
     private(set) var remoteName: String = "Unknown"
     private(set) var remoteFingerprint: String = ""
-    /// Codec for the control-event send path, set once at connect. The receiver
-    /// auto-detects the format, so only the sender's choice matters.
-    var useBinaryControl = false
 
     init(stream: ByteStream) {
         self.stream = stream
@@ -89,8 +46,6 @@ final class PeerLink: @unchecked Sendable {
     nonisolated(unsafe) private static var live = 0
     static var liveCount: Int { countLock.lock(); defer { countLock.unlock() }; return live }
 
-    /// Convenience for the NWListener fallback path.
-    convenience init(connection: NWConnection) { self.init(stream: NWByteStream(connection)) }
 
     func start() async throws { try await stream.open() }
 
@@ -187,32 +142,13 @@ final class PeerLink: @unchecked Sendable {
         try JSONDecoder().decode(type, from: try await receiveSecure())
     }
 
-    // MARK: Control-event fast path (feature-flagged codec)
+    // MARK: Control events
 
-    /// Leading sentinel byte marking a binary-codec control frame. JSON payloads always
-    /// begin with `{` (0x7B), never 0x01, so the peer disambiguates by content — no
-    /// handshake negotiation. Flag OFF sends bare JSON, byte-identical to the legacy
-    /// protocol, so an un-updated peer still interoperates when binary is disabled.
-    private static let binaryControlTag: UInt8 = 0x01
+    /// Send a control event on the low-latency sync path. POSIX transport only (returns false
+    /// otherwise).
+    func sendControlEventSync(_ event: ControlEvent) -> Bool { sendSecureObjectSync(event) }
 
-    /// Send a control event on the low-latency sync path using this link's codec
-    /// (`useBinaryControl`, set once at connect). JSON path reuses `sendSecureObjectSync`;
-    /// binary path prepends the sentinel tag so the peer disambiguates by content.
-    /// POSIX transport only (returns false otherwise).
-    func sendControlEventSync(_ event: ControlEvent) -> Bool {
-        guard useBinaryControl, event.isBinaryEncodable else { return sendSecureObjectSync(event) }
-        var payload = Data([PeerLink.binaryControlTag])
-        payload.append(event.encodedBinary())
-        return sendSealedSync(payload)
-    }
-
-    /// Receive one control event, auto-detecting the codec from the payload's first byte.
-    /// Always handles both JSON and binary, so the sender's flag needs no coordination.
     func receiveControlEvent() async throws -> ControlEvent {
-        let plain = try await receiveSecure()
-        if plain.first == PeerLink.binaryControlTag, plain.count >= ControlEvent.binarySize + 1 {
-            return try ControlEvent(binary: plain.dropFirst())
-        }
-        return try JSONDecoder().decode(ControlEvent.self, from: plain)   // legacy / flag-off JSON
+        try JSONDecoder().decode(ControlEvent.self, from: try await receiveSecure())
     }
 }

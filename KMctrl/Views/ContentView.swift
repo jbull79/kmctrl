@@ -99,8 +99,7 @@ struct ContentView: View {
                 Spacer()
                 if host.state != .connecting {
                     Button("Wake screen") { host.wakeRemoteDisplay() }
-                        .disabled(host.peerVersion < 2)
-                        .help(host.peerVersion < 2 ? "The other Mac needs KMctrl 0.8 or later" : "Wake the other Mac's display")
+                        .help("Wake the other Mac's display")
                 }
                 Button("Disconnect") { host.disconnect() }
             }
@@ -135,16 +134,14 @@ struct ContentView: View {
 
     private func startControl(_ peer: Peer) {
         host.edgeModeEnabled = settings.useEdgeMode   // window mode unless edge mode is on
-        host.edgeHandoffSpike = settings.edgeHandoffSpike     // experimental: pointer-edge switch
-        host.returnAtEdge = settings.returnAtEdge             // experimental: push-back return
+        host.pointerEdgeSwitch = settings.pointerEdgeSwitch   // switch at the edge without permissions
+        host.returnAtEdge = settings.returnAtEdge             // push back across to return
         host.handoffOffsetMM = settings.handoffOffsetMM       // where the other screen sits on the edge
         host.remoteScreenFallback = settings.remoteScreen
         host.onRemoteScreen = { settings.remoteScreen = $0 }  // remember its size for the arrangement
         host.controlEdge = settings.controlEdge
         host.controlDisplayID = settings.handoffDisplayID
         host.controlDisplayIdentity = settings.handoffDisplayIdentity
-        host.useBinaryControl = settings.binaryControl        // experimental codec flag
-        host.flushIntervalMs = settings.flushIntervalMs       // experimental cadence knob
         host.connect(to: peer, localName: settings.deviceName)
     }
 

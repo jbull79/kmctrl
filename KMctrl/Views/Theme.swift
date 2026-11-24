@@ -8,7 +8,6 @@ enum Theme {
     static let s2: CGFloat = 8
     static let s3: CGFloat = 12
     static let s4: CGFloat = 16
-    static let s5: CGFloat = 22
 
     static let radius: CGFloat = 12
     static let radiusSmall: CGFloat = 8

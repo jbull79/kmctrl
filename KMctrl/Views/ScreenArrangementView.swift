@@ -27,7 +27,7 @@ struct ScreenArrangementView: View {
         // The saved monitor, wherever macOS has numbered it now. While it's unplugged the other
         // Mac is drawn beside the main display, and the saved arrangement is left alone.
         let saved = HandoffAnchor.resolve(saved: identity, savedID: displayID, among: monitors)
-        let missing = dragDisplay == nil && saved == nil && (displayID != 0 || identity != nil)
+        let missing = dragDisplay == nil && saved == nil && identity != nil
         let anchor = dragDisplay ?? saved ?? CGMainDisplayID()
         let layout = HandoffLayout(monitors: monitors, remote: other, anchorID: anchor, edge: liveEdge,
                                    offsetMM: liveOffset(monitors, anchor: anchor))

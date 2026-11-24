@@ -30,7 +30,7 @@ struct LogsView: View {
             } header: {
                 Text("Save to file")
             } footer: {
-                Text("Saves this Mac’s log to ~/Library/Logs/KMctrl and fetches the other Mac’s over the open session (both Macs need 0.8.24 or later). Keystrokes and clipboard contents are never logged.")
+                Text("Saves this Mac’s log to ~/Library/Logs/KMctrl and fetches the other Mac’s over the open session. Keystrokes and clipboard contents are never logged.")
             }
 
             Section {

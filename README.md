@@ -10,7 +10,7 @@ other machine without admin rights.
 
 ## Download
 
-**[⬇ KMctrl 0.8.24 — download the app](https://github.com/jbull79/kmctrl/releases/download/v0.8.24/KMctrl-0.8.24.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
+**[⬇ KMctrl 1.0 — download the app](https://github.com/jbull79/kmctrl/releases/download/v1.0/KMctrl-1.0.zip)** · [all releases](https://github.com/jbull79/kmctrl/releases)
 
 Unsigned, ad-hoc, **Apple Silicon only** (won't run on Intel). macOS quarantines
 downloaded unsigned apps — clear it (no admin needed on your own files):
@@ -23,17 +23,21 @@ If it still won't open, your MDM enforces Gatekeeper — build locally in Xcode 
 
 ## How it works
 
-- **Discovery** — Bonjour (`_kmctrl._tcp`); peers appear automatically.
+- **Discovery** — Bonjour (`_kmctrl._tcp`); peers appear automatically. The link is a raw TCP
+  socket with kernel routing, so it works with a VPN up.
 - **Security** — signed Curve25519 ECDH handshake → AES-GCM session, trust-on-first-use
   fingerprints (same core as NetCatch).
 - **Control** — the controlling Mac captures input and streams relative mouse/keyboard
   events; the controlled Mac injects them with `CGEvent`.
   - **Window mode** (default) — click the capture area to start; press **⌃⌥⌘** to release.
     No Accessibility/Input Monitoring needed → works on a locked-down MDM Mac.
-  - **Edge mode** — bump a screen edge to hand off. Needs Accessibility + Input Monitoring
-    (admin-grantable), so it's for non-MDM Macs.
+  - **Edge switch** — rest the pointer on a monitor edge next to the other Mac to switch, and
+    push back across on the other Mac to return (Settings → Control). No permissions, so it
+    works on an MDM Mac.
+  - **Edge mode** — the same at the edge, with input captured by an event tap. Needs
+    Accessibility + Input Monitoring (admin-grantable), so it's for non-MDM Macs.
 
-## Features (0.8)
+## Features
 
 - **Clipboard follows control** — when you start controlling, your clipboard (text or image)
   is handed to the other Mac; when you release, its clipboard comes back. No polling.
@@ -86,11 +90,9 @@ across rebuilds (no Apple Developer account needed).
 
 ## Status
 
-0.8 — daily-usable window-mode KVM. The networking/crypto core is shared (vendored) from
-NetCatch and covered by tests there; KMctrl's own logic (control codec, key/media-key
-mapping, versioning, clipboard state) is covered by `KMctrlTests`. Design notes live in
-`docs/superpowers/specs`.
+1.0. The networking/crypto core started out vendored from NetCatch; KMctrl's logic (protocol,
+hand-off geometry, key/media-key mapping, clipboard, transport, logs) is covered by
+`KMctrlTests`. Design notes live in `docs/superpowers/specs`.
 
-**Protocol note:** the experimental binary control codec in 0.8 carries typed characters, so
-both Macs must run 0.8+ when that flag is on. The default JSON path interoperates with 0.7.x
-(new features are simply not sent to an older peer).
+**Versions:** both Macs need KMctrl 1.0 or later (control protocol v7). A Mac on an older
+version is refused with a message asking to update it, rather than run with features missing.

@@ -99,27 +99,21 @@ struct ReturnWatch {
     static let maxZones = 32
 
     let zones: [Zone]
-    /// The controller speaks v5 and wants the zone index with each return.
-    let reportsZone: Bool
     private var triggers: [EdgeReturnTrigger]
 
-    init(zones: [Zone], reportsZone: Bool) {
+    init(zones: [Zone]) {
         self.zones = zones
-        self.reportsZone = reportsZone
         triggers = Array(repeating: EdgeReturnTrigger(), count: zones.count)
     }
 
-    /// From the controller's setup: its v5 zones, or the single edge an older controller sends.
-    /// nil when the controller doesn't want control handed back at an edge (window mode).
+    /// From the controller's setup: one zone per way back. With none usable, the whole side
+    /// opposite the controller's hand-off edge, so control can always be pushed back. nil when
+    /// the controller doesn't want control handed back at an edge (window mode).
     init?(setup: ControlSetup) {
         guard setup.autoReturn else { return nil }
-        let v5 = (setup.returnZones ?? []).lazy.compactMap { z in Self.span(z.span).map { Zone(edge: z.edge, span: $0) } }
-        let zones = Array(v5.prefix(Self.maxZones))
-        if zones.isEmpty {
-            self.init(zones: [Zone(edge: setup.hostEdge.opposite, span: setup.returnSpan.flatMap(Self.span))], reportsZone: false)
-        } else {
-            self.init(zones: zones, reportsZone: true)
-        }
+        let valid = (setup.returnZones ?? []).lazy.compactMap { z in Self.span(z.span).map { Zone(edge: z.edge, span: $0) } }
+        let zones = Array(valid.prefix(Self.maxZones))
+        self.init(zones: zones.isEmpty ? [Zone(edge: setup.hostEdge.opposite, span: nil)] : zones)
     }
 
     private static func span(_ v: [Double]) -> ClosedRange<Double>? {

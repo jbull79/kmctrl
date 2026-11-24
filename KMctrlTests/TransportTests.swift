@@ -16,9 +16,4 @@ final class TransportTests: XCTestCase {
         XCTAssertFalse(ok)                         // reaching here at all means no SIGPIPE
         stream.close()
     }
-
-    func testProbesOnlySentToV2Peers() {
-        XCTAssertFalse(ControlHost.sendsProbes(peerVersion: 1))   // 0.5–0.7 peers drop unknown kinds
-        XCTAssertTrue(ControlHost.sendsProbes(peerVersion: 2))
-    }
 }

@@ -1,135 +1,49 @@
 import Foundation
 import Network
 
-/// Which underlying transport carried a connection. We probe these in order and remember
-/// the one that actually completed a handshake to a given peer.
-enum TransportStrategy: String, CaseIterable {
-    case posix              // raw BSD socket, kernel routing — works through a VPN like nc
-    case nwProhibitOther    // Network.framework, excluding virtual/VPN interfaces
-    case nwDefault          // Network.framework, default path selection
-
-    var label: String {
-        switch self {
-        case .posix: return "POSIX socket"
-        case .nwProhibitOther: return "Apple (LAN-only)"
-        case .nwDefault: return "Apple (default)"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .posix: return "Raw BSD socket with kernel routing — works through a VPN like nc."
-        case .nwProhibitOther: return "Apple Network.framework, excluding virtual/VPN interfaces."
-        case .nwDefault: return "Apple Network.framework with default path selection."
-        }
-    }
-}
-
-/// Establishes an outbound `PeerLink` by trying each transport strategy until one
-/// completes the handshake, then caching the winner per peer so later transfers connect
-/// straight away. This makes NetCatch resilient across environments: some peers only work
-/// over raw sockets (VPN present), some only over Network.framework, etc.
+/// Establishes an outbound `PeerLink`: finds the other Mac's address, opens a raw POSIX socket
+/// to it (kernel routing, so it works with a VPN up, like `nc`) and runs the handshake. Control
+/// frames are written synchronously to that socket, so it is the only transport.
 @MainActor
 final class TransportConnector {
     static let shared = TransportConnector()
 
-    private var winner: [String: TransportStrategy] = [:]
     private let connectTimeout: TimeInterval = 6
     /// Opens the raw socket. Tests replace it to see which thread it runs on.
     var openSocket: @Sendable (String, UInt16, TimeInterval) throws -> POSIXByteStream = POSIXByteStream.connect
 
-    /// Strategies to try, in order: the allowed ones, last-known-good first if it is allowed.
-    /// A cached winner outside `allowed` is ignored, so callers that need a specific transport
-    /// (control needs a raw socket) can't be routed onto another by an earlier fallback.
-    nonisolated static func attemptOrder(allowed: Set<TransportStrategy>,
-                             preferred: TransportStrategy?) -> [TransportStrategy] {
-        var order = TransportStrategy.allCases.filter { allowed.contains($0) }
-        if order.isEmpty { order = TransportStrategy.allCases }   // safety: never nothing to try
-        if let preferred, order.contains(preferred) {
-            order.removeAll { $0 == preferred }
-            order.insert(preferred, at: 0)
-        }
-        return order
-    }
-
-    /// Connect + handshake to `peer`, returning a ready, authenticated link. `allowed`
-    /// restricts which transport methods may be tried (user-toggleable for testing).
-    /// `lookupLimit` is how long to wait for the peer's address before going without it.
-    func connect(to peer: Peer, localName: String,
-                 allowed: Set<TransportStrategy> = Set(TransportStrategy.allCases),
-                 lookupLimit: TimeInterval = 4) async throws -> PeerLink {
+    /// Connect + handshake to `peer`, returning a ready, authenticated link. `lookupLimit` is
+    /// how long to wait for the peer's address.
+    func connect(to peer: Peer, localName: String, lookupLimit: TimeInterval = 4) async throws -> PeerLink {
         let lookupStart = Date()
         let resolved = await resolveHostPort(peer.endpoint, limit: lookupLimit)
         let lookupMs = Int(Date().timeIntervalSince(lookupStart) * 1000)
-        if let resolved {
-            DebugLog.log("connect: found \(peer.name) at \(resolved.host):\(resolved.port) in \(lookupMs) ms")
-        } else {
+        guard let resolved else {
             DebugLog.log("connect: no address for \(peer.name) after \(lookupMs) ms", .warn)
+            throw LinkError.addressNotFound(peer.name)
         }
-        let key = resolved.map { "\($0.host):\($0.port)" } ?? peer.id
-
-        let order = Self.attemptOrder(allowed: allowed, preferred: winner[key])
-
-        var lastError: Error?
-        for strategy in order {
-            // POSIX needs a concrete host:port; skip it if Bonjour didn't resolve.
-            if strategy == .posix && resolved == nil { continue }
-            do {
-                let link = try await attempt(strategy, peer: peer, resolved: resolved, localName: localName)
-                if winner[key] != strategy {
-                    winner[key] = strategy
-                    DebugLog.log("connect: '\(strategy.label)' worked for \(key) — caching")
-                }
-                return link
-            } catch {
-                lastError = error
-                DebugLog.log("connect: '\(strategy.label)' failed for \(key) — \(error.localizedDescription)", .warn)
-            }
-        }
-        throw lastError ?? (resolved == nil ? LinkError.addressNotFound(peer.name) : LinkError.closed)
-    }
-
-    /// Forget a cached choice (e.g. after a network change) so probing restarts fresh.
-    func resetCache() { winner.removeAll() }
-
-    /// Resolve a peer's endpoint to a display "host:port" string (Bonjour → IP).
-    func resolveAddress(of peer: Peer) async -> String? {
-        guard let r = await resolveHostPort(peer.endpoint) else { return nil }
-        return "\(r.host):\(r.port)"
-    }
-
-    // MARK: - One strategy attempt (connect + handshake)
-
-    private func attempt(_ strategy: TransportStrategy, peer: Peer,
-                         resolved: (host: String, port: UInt16)?, localName: String) async throws -> PeerLink {
-        let stream: ByteStream
-        switch strategy {
-        case .posix:
-            guard let r = resolved else { throw LinkError.closed }
-            // Off the main thread: a Mac that doesn't answer holds this for the whole timeout,
-            // and reconnecting repeats it, with Disconnect the only way out.
-            let timeout = connectTimeout
-            let open = openSocket
-            stream = try await Task.detached(priority: .userInitiated) { try open(r.host, r.port, timeout) }.value
-        case .nwProhibitOther:
-            let params = NWParameters.tcp
-            params.prohibitedInterfaceTypes = [.other]
-            (params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)?.noDelay = true
-            stream = NWByteStream(NWConnection(to: peer.endpoint, using: params))
-        case .nwDefault:
-            let params = NWParameters.tcp
-            (params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)?.noDelay = true
-            stream = NWByteStream(NWConnection(to: peer.endpoint, using: params))
-        }
+        DebugLog.log("connect: found \(peer.name) at \(resolved.host):\(resolved.port) in \(lookupMs) ms")
+        // Off the main thread: a Mac that doesn't answer holds this for the whole timeout,
+        // and reconnecting repeats it, with Disconnect the only way out.
+        let timeout = connectTimeout
+        let open = openSocket
+        let stream = try await Task.detached(priority: .userInitiated) { try open(resolved.host, resolved.port, timeout) }.value
         let link = PeerLink(stream: stream)
         do {
             try await link.start()
             try await link.handshake(localName: localName)   // validates the path end-to-end
             return link
         } catch {
+            DebugLog.log("connect: \(resolved.host):\(resolved.port) failed — \(error.localizedDescription)", .warn)
             link.cancel()
             throw error
         }
+    }
+
+    /// Resolve a peer's endpoint to a display "host:port" string (Bonjour → IP).
+    func resolveAddress(of peer: Peer) async -> String? {
+        guard let r = await resolveHostPort(peer.endpoint) else { return nil }
+        return "\(r.host):\(r.port)"
     }
 
     // MARK: - Bonjour / endpoint resolution

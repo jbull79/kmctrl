@@ -10,10 +10,6 @@ import CoreGraphics
 final class ControlHost: ObservableObject {
     enum State: Equatable { case idle, connecting, connected, capturing }
 
-    /// Control frames are written synchronously to a raw socket (`sendControlEventSync`), so a
-    /// control link must be POSIX. A Network.framework link would connect and then drop on
-    /// the first frame.
-    nonisolated static let controlTransports: Set<TransportStrategy> = [.posix]
     /// A control link can't start without the other Mac's address, because the raw socket needs
     /// it. The lookup ran past 4 s on the work Mac, which failed the connect while a retry worked
     /// at once, and it took 8.5 s in a test on the home Mac.
@@ -28,7 +24,6 @@ final class ControlHost: ObservableObject {
     /// Opens a session's link. Tests replace it to run the session code without a network.
     var dial: @MainActor (Peer, String) async throws -> PeerLink = { peer, localName in
         try await TransportConnector.shared.connect(to: peer, localName: localName,
-                                                    allowed: ControlHost.controlTransports,
                                                     lookupLimit: ControlHost.connectLookupLimit)
     }
     /// How long to wait before reconnect attempt `attempt` (the first is 1). The link has only
@@ -62,39 +57,27 @@ final class ControlHost: ObservableObject {
     nonisolated static let clipboardReturnWindowMs = 5_000.0
 
     /// Hand our clipboard to the controlled Mac over the control link (outbound only — no
-    /// inbound connection to this Mac is ever needed). v2 peers only.
+    /// inbound connection to this Mac is ever needed).
     func sendClipboard(_ payload: ClipboardPayload) throws {
         guard state == .connected || state == .capturing, link != nil else { throw LinkError.closed }
-        guard peerVersion >= 3 else { throw LinkError.rejected }   // older peers can't decode .clipboard
         var e = ControlEvent(kind: .clipboard); e.clipboard = payload
         sendOnQueue(e)
     }
     @Published var lastError: String?
-    /// Control protocol version of the connected peer (from its `ControlAck`); 1 until known.
-    @Published private(set) var peerVersion = 1
     /// Round-trip samples aggregated to one Diagnostics line per second.
     private var latency = LatencyStats()
 
     /// Monotonic clock in ms. `nonisolated` so the off-main flush timer can stamp pings.
-    /// Latency probes / host stats use event kinds that 0.5–0.7 peers don't know; an old
-    /// peer drops the whole session on the first one, so only v2 peers get them.
-    nonisolated static func sendsProbes(peerVersion: Int) -> Bool { peerVersion >= 2 }
-    /// `.edgeSetup` is v4; an older peer drops the session on the unknown kind.
-    nonisolated static func sendsEdgeSetup(peerVersion: Int) -> Bool { peerVersion >= 4 }
-    /// `.logRequest`/`.log` are v6; an older peer drops the session on the unknown kind.
-    nonisolated static func sendsLogRequest(peerVersion: Int) -> Bool { peerVersion >= 6 }
-
     /// Ask the controlled Mac for its diagnostics log (it comes back in `ControlReturn.log`).
-    /// False when there's no session or the other Mac is too old to answer.
+    /// False when there's no session.
     func requestPeerLog() -> Bool {
-        guard state == .connected || state == .capturing, linkBox.link != nil,
-              Self.sendsLogRequest(peerVersion: peerVersion) else { return false }
+        guard state == .connected || state == .capturing, linkBox.link != nil else { return false }
         sendOnQueue(ControlEvent(kind: .logRequest))
         return true
     }
 
     /// How a session switches at the edge: edge mode's event tap, the permission-free pointer
-    /// watcher (experimental), or not at all.
+    /// watcher, or not at all.
     enum EdgeSwitch: Equatable { case tap, pointerWatch, off }
     /// Edge mode's tap needs Accessibility + Input Monitoring, which an MDM Mac can't grant.
     /// Without them the session falls back to the pointer watcher (when on) instead of nothing.
@@ -120,10 +103,10 @@ final class ControlHost: ObservableObject {
     var controlDisplayID: UInt32 = 0         // which monitor's edge (0 = whole desktop)
     /// That monitor itself, so the arrangement still finds it after macOS renumbers displays.
     var controlDisplayIdentity: DisplayIdentity?
-    /// EXPERIMENTAL, set by the UI before `connect`: switch on the pointer resting at the
-    /// hand-off edge (window-mode capture, no event tap), and ask the peer to return control
-    /// when its pointer is pushed past the opposite edge.
-    var edgeHandoffSpike = false
+    /// Set by the UI before `connect`: switch on the pointer resting at an edge next to the other
+    /// Mac (window-mode capture, no event tap), and ask the peer to return control when its
+    /// pointer is pushed back across.
+    var pointerEdgeSwitch = false
     var returnAtEdge = false
     private var edgeWatcher: DispatchSourceTimer?
     private var edgePanel: EdgeCapturePanel?
@@ -144,10 +127,8 @@ final class ControlHost: ObservableObject {
     private let screens = ScreenChangeWatcher() // re-lays the edge out when our monitors change
     private var pendingEntry: CGPoint?          // where to put the remote pointer on an edge switch
     private var returnLanding: CGPoint?         // where to put ours when the peer hands back
-    /// EXPERIMENTAL flags, set by the UI before `connect` (read at capture setup, so a
-    /// change takes effect on the next connection — reconnect to A/B them).
-    var useBinaryControl = false             // binary vs JSON control-event codec
-    var flushIntervalMs = AppSettings.defaultFlushInterval   // mouse-move coalescing cadence
+    /// How often coalesced mouse moves go out.
+    nonisolated static let flushIntervalMs = 8
     /// Live multiplier on forwarded mouse deltas (mirrors AppSettings.mouseSensitivity).
     var mouseSensitivity = 1.0
 
@@ -294,23 +275,31 @@ final class ControlHost: ObservableObject {
                     DebugLog.log("control host: peer refused — \(self.lastError ?? "")", .warn)
                     return
                 }
-                self.peerVersion = ack.version
+                // One version check for the whole session: below the minimum, refuse rather than
+                // run with features the other Mac can't take.
+                guard SessionHello.isSupported(controlVersion: ack.version) else {
+                    link.cancel()
+                    self.lastError = SessionHello.olderControlledReason(other: peer.name)
+                    self.stopReconnecting()
+                    self.state = .idle
+                    DebugLog.log("control host: refused \(peer.name) — it speaks protocol v\(ack.version), v\(SessionHello.minimumControlVersion) or later needed", .error)
+                    return
+                }
                 self.peerFingerprint = link.remoteFingerprint
                 // Safe permission reads only — probing a live tap on an MDM Mac can get us killed.
                 let edgeSwitch = Self.edgeSwitch(edgeMode: self.edgeModeEnabled,
                                                  permitted: AXIsProcessTrusted() && CGPreflightListenEventAccess(),
-                                                 pointerWatch: self.edgeHandoffSpike)
+                                                 pointerWatch: self.pointerEdgeSwitch)
                 if self.edgeModeEnabled && edgeSwitch != .tap {
                     self.edgeModeEnabled = false        // this session runs as window mode
                     if edgeSwitch == .pointerWatch {
-                        DebugLog.log("control host: edge mode lacks Accessibility / Input Monitoring — using the experimental edge switch", .warn)
+                        DebugLog.log("control host: edge mode lacks Accessibility / Input Monitoring — using the pointer edge switch", .warn)
                     } else {
                         self.lastError = "Edge mode needs Accessibility + Input Monitoring (grant them in Settings → Control)."
                         DebugLog.log("control host: edge mode lacks Accessibility / Input Monitoring — window mode only", .warn)
                     }
                 }
                 link.setLowLatency()        // ask Wi-Fi not to batch our input frames
-                link.useBinaryControl = self.useBinaryControl   // codec fixed for this session
                 let reported = ack.screen.flatMap { $0.isPlausible ? $0 : nil }   // a bad size used to crash Settings
                 if let s = reported { self.onRemoteScreen?(s) }
                 try await link.sendSecureObject(self.layOutHandoff(remote: reported ?? self.remoteScreenFallback ?? .assumedRemote))
@@ -331,7 +320,7 @@ final class ControlHost: ObservableObject {
                 case .off: break
                 }
                 self.startReturnReader(link: link)
-                if ack.version >= 4 { self.screens.start { [weak self] in self?.screensChanged(remote: nil) } }
+                self.screens.start { [weak self] in self?.screensChanged(remote: nil) }
                 DebugLog.log("control host: connected to \(peer.name) (protocol v\(ack.version))")
             } catch {
                 opened?.cancel()
@@ -361,7 +350,7 @@ final class ControlHost: ObservableObject {
         let old = link
         link = nil
         linkBox.link = nil
-        state = .idle; peerName = nil; peerVersion = 1; currentPeer = nil; peerFingerprint = nil
+        state = .idle; peerName = nil; currentPeer = nil; peerFingerprint = nil
         latency = LatencyStats()
         stopReconnecting()
         health.stop()
@@ -438,7 +427,7 @@ final class ControlHost: ObservableObject {
         let monitors = HandoffMonitor.current()
         let found = HandoffAnchor.resolve(saved: controlDisplayIdentity, savedID: controlDisplayID, among: monitors)
         let wanted = controlDisplayIdentity?.name ?? "display \(controlDisplayID)"
-        if found == nil, controlDisplayID != 0 || controlDisplayIdentity != nil {
+        if found == nil, controlDisplayIdentity != nil {
             DebugLog.log("control host: hand-off monitor \(wanted) isn't connected — using the main display until it's back", .warn)
         } else if let found, found != controlDisplayID {
             DebugLog.log("control host: hand-off monitor \(wanted) is now display \(found) (saved as \(controlDisplayID))")
@@ -457,10 +446,8 @@ final class ControlHost: ObservableObject {
         }
         if layout.isBetweenMonitors { DebugLog.log("control host: the other screen sits between two monitors — crossing that seam switches") }
         let armReturn = edgeModeEnabled || returnAtEdge
-        let anchor = layout.anchorPortal.map { layout.portals[$0] }
         return ControlSetup(hostEdge: controlEdge, autoReturn: armReturn,
                             returnArea: armReturn ? remote : nil,
-                            returnSpan: armReturn ? anchor.map { [$0.remoteSpan.lowerBound, $0.remoteSpan.upperBound] } : nil,
                             returnZones: armReturn ? layout.returnZones : nil,
                             arrangement: layout.snapshot())
     }
@@ -488,10 +475,10 @@ final class ControlHost: ObservableObject {
         guard state != .idle, let current = remoteScreen else { return }
         DebugLog.log("control host: \(why) — re-laying out the hand-off edge")
         let setup = layOutHandoff(remote: remote ?? current)
-        if Self.sendsEdgeSetup(peerVersion: peerVersion) { sendOnQueue(ControlEvent(kind: .edgeSetup, setup: setup)) }
+        sendOnQueue(ControlEvent(kind: .edgeSetup, setup: setup))
         if edgeModeEnabled {
             if state == .capturing { edgeModeStale = true } else { restartEdgeMode() }
-        } else if edgeHandoffSpike {
+        } else if pointerEdgeSwitch {
             startEdgeWatcher()
         }
     }
@@ -531,8 +518,7 @@ final class ControlHost: ObservableObject {
                     await MainActor.run { LogExchange.shared.received(log, from: link.remoteName) }
                 } else if r.logRequest == true {
                     await MainActor.run {
-                        guard let self, Self.sendsLogRequest(peerVersion: self.peerVersion),
-                              self.state == .connected || self.state == .capturing,
+                        guard let self, self.state == .connected || self.state == .capturing,
                               let log = LogExchange.shared.answer(to: link.remoteName) else { return }
                         self.sendOnQueue(ControlEvent(kind: .log, log: log))
                     }
@@ -545,7 +531,7 @@ final class ControlHost: ObservableObject {
                         }
                         self.onClipboardReceived(payload, link.remoteFingerprint)
                     }
-                } else {
+                } else if r.isReturnSignal {
                     DebugLog.log("control host: peer signalled return of control")
                     let at = r.at.flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
                     let zone = r.zone
@@ -594,11 +580,11 @@ final class ControlHost: ObservableObject {
     }
 
     /// Edge mode's tap saw the pointer go across: put the other Mac's pointer at the matching
-    /// place (v4 peers), then capture.
+    /// place, then capture.
     private func edgeModeBegan(_ hit: PortalHit) {
         guard state == .connected else { return }
         enteredPortal = hit.portal
-        if let g = handoff, peerVersion >= 4 {
+        if let g = handoff {
             let e = g.entryPoint(portal: hit.portal, along: hit.along)
             sendOnQueue(ControlEvent(kind: .enterAt, dx: e.x, dy: e.y))
         }
@@ -620,10 +606,10 @@ final class ControlHost: ObservableObject {
         if edgeModeStale { restartEdgeMode() }   // arrangement changed while we were away
     }
 
-    /// Ask the controlled Mac to wake its display (v2 peers only). Sent automatically when
-    /// capture begins and on demand from the UI.
+    /// Ask the controlled Mac to wake its display. Sent automatically when capture begins and
+    /// on demand from the UI.
     func wakeRemoteDisplay() {
-        guard state == .connected || state == .capturing, peerVersion >= 2 else { return }
+        guard state == .connected || state == .capturing else { return }
         sendOnQueue(ControlEvent(kind: .wakeDisplay))
     }
 
@@ -691,7 +677,7 @@ final class ControlHost: ObservableObject {
         }
         t.resume()
         edgeWatcher = t
-        DebugLog.log("control host: edge switch (experimental) watching \(portals.count) stretch\(portals.count == 1 ? "" : "es") of edge")
+        DebugLog.log("control host: edge switch watching \(portals.count) stretch\(portals.count == 1 ? "" : "es") of edge")
     }
 
     private func stopEdgeWatcher() { edgeWatcher?.cancel(); edgeWatcher = nil }
@@ -746,8 +732,8 @@ final class ControlHost: ObservableObject {
                 self.endCapture()
             }
         }
-        // Put the other Mac's pointer where ours crossed the edge (v4 peers), before any moves.
-        if let e = pendingEntry, peerVersion >= 4 { sendOnQueue(ControlEvent(kind: .enterAt, dx: e.x, dy: e.y)) }
+        // Put the other Mac's pointer where ours crossed the edge, before any moves.
+        if let e = pendingEntry { sendOnQueue(ControlEvent(kind: .enterAt, dx: e.x, dy: e.y)) }
         pendingEntry = nil
         installMonitor()
         enterCapture()
@@ -854,8 +840,7 @@ final class ControlHost: ObservableObject {
     private func startFlushTimer() {
         flushTimer?.cancel()
         let buf = moveBuffer; let box = linkBox; let lag = inputLag
-        let intervalMs = flushIntervalMs   // already validated by AppSettings
-        let probes = ControlHost.sendsProbes(peerVersion: peerVersion)
+        let intervalMs = Self.flushIntervalMs
         let timer = DispatchSource.makeTimerSource(queue: flushQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(intervalMs), leeway: .nanoseconds(0))
         var sent = 0, ticks = 0
@@ -895,7 +880,7 @@ final class ControlHost: ObservableObject {
             }
             let now = DispatchTime.now()
             // Latency probe: ~5×/sec, host stamps its own clock; client bounces it back.
-            if probes, now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
+            if now.uptimeNanoseconds - lastPing.uptimeNanoseconds >= 200_000_000 {
                 if !link.sendControlEventSync(ControlEvent(kind: .ping, dx: ControlHost.nowMs())) {
                     DebugLog.log("control host: send of ping failed", .error)
                     Task { @MainActor in self?.sendFailed(on: link) }
@@ -903,8 +888,8 @@ final class ControlHost: ObservableObject {
                 lastPing = now
             }
             if now.uptimeNanoseconds - window.uptimeNanoseconds >= 1_000_000_000 {
-                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms, \(link.useBinaryControl ? "binary" : "json")), input lag max \(Int(lag.takeMax())) ms\(drifted > 0 ? ", local pointer drifted \(drifted)×" : "")")
-                if probes { _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks))) }
+                DebugLog.log("control host: \(sent) moves/s sent (\(ticks) timer ticks/s, \(intervalMs)ms), input lag max \(Int(lag.takeMax())) ms\(drifted > 0 ? ", local pointer drifted \(drifted)×" : "")")
+                _ = link.sendControlEventSync(ControlEvent(kind: .hostStats, dx: Double(sent), dy: Double(ticks)))
                 sent = 0; ticks = 0; drifted = 0; window = now
             }
         }
@@ -981,13 +966,13 @@ final class ControlHost: ObservableObject {
         case .scrollWheel:    return ControlEvent(kind: .scroll, scrollX: e.scrollingDeltaX, scrollY: e.scrollingDeltaY, flags: flags)
         case .keyDown:
             var ce = ControlEvent(kind: .keyDown, keyCode: Int(e.keyCode), flags: flags)
-            // v2 peers get the typed characters so typing is layout-independent.
-            if peerVersion >= 2 { ce.chars = KeyCharacters.override(for: e.characters, flags: flags) }
+            // The typed characters go along, so typing follows this Mac's keyboard layout.
+            ce.chars = KeyCharacters.override(for: e.characters, flags: flags)
             return ce
         case .keyUp:          return ControlEvent(kind: .keyUp, keyCode: Int(e.keyCode), flags: flags)
         case .flagsChanged:   return ControlEvent(kind: .flagsChanged, flags: flags)
         case .systemDefined:
-            guard peerVersion >= 2, e.subtype.rawValue == MediaKey.subtypeAuxControl,
+            guard e.subtype.rawValue == MediaKey.subtypeAuxControl,
                   let mk = MediaKey.decode(data1: e.data1), MediaKey.forwarded.contains(mk.key)
             else { return nil }
             return ControlEvent(kind: .mediaKey, button: mk.isDown ? 1 : 0, keyCode: mk.key, flags: flags)

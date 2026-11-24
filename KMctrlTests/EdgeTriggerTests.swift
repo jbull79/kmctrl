@@ -161,7 +161,7 @@ final class EdgeSpanTests: XCTestCase {
 final class ReturnWatchTests: XCTestCase {
     let home = CGRect(x: 0, y: 0, width: 2560, height: 1440)
     var watch: ReturnWatch {
-        ReturnWatch(zones: [.init(edge: .bottom, span: 0...2560), .init(edge: .right, span: 0...700)], reportsZone: true)
+        ReturnWatch(zones: [.init(edge: .bottom, span: 0...2560), .init(edge: .right, span: 0...700)])
     }
     func pushRight(_ w: inout ReturnWatch, y: Double, by d: Double, held: Bool = false) -> Int? {
         w.check(cursor: CGPoint(x: 2559, y: y), intended: CGPoint(x: 2559 + d, y: y), bounds: home, buttonHeld: held)
@@ -186,18 +186,19 @@ final class ReturnWatchTests: XCTestCase {
         XCTAssertNil(pushRight(&w, y: 300, by: 100, held: true))
     }
 
-    func testV5SetupGivesOneZonePerWayIn() throws {
+    func testSetupGivesOneZonePerWayIn() throws {
         var setup = ControlSetup(hostEdge: .top, autoReturn: true)
         setup.returnZones = [ReturnZone(edge: .bottom, span: [0, 2560]), ReturnZone(edge: .right, span: [0, 1440])]
         let w = try XCTUnwrap(ReturnWatch(setup: setup))
         XCTAssertEqual(w.zones, [.init(edge: .bottom, span: 0...2560), .init(edge: .right, span: 0...1440)])
-        XCTAssertTrue(w.reportsZone)
     }
 
-    func testV4SetupGivesTheSingleOppositeEdge() throws {
-        let w = try XCTUnwrap(ReturnWatch(setup: ControlSetup(hostEdge: .top, autoReturn: true, returnSpan: [10, 20])))
-        XCTAssertEqual(w.zones, [.init(edge: .bottom, span: 10...20)])
-        XCTAssertFalse(w.reportsZone)
+    func testWithNoUsableZoneTheWholeOppositeSideStillReturns() throws {
+        // Never leave the pointer stuck on the other Mac.
+        var setup = ControlSetup(hostEdge: .top, autoReturn: true)
+        XCTAssertEqual(try XCTUnwrap(ReturnWatch(setup: setup)).zones, [.init(edge: .bottom, span: nil)])
+        setup.returnZones = [ReturnZone(edge: .left, span: [5, 1])]
+        XCTAssertEqual(try XCTUnwrap(ReturnWatch(setup: setup)).zones, [.init(edge: .bottom, span: nil)])
     }
 
     func testNoAutoReturnNoWatch() {
