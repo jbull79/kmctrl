@@ -186,6 +186,30 @@ final class ReturnWatchTests: XCTestCase {
         XCTAssertNil(pushRight(&w, y: 300, by: 100, held: true))
     }
 
+    /// A push that hands control back keeps going for a moment: moves still on their way, and
+    /// the rest of the flick draining. It used to send "return" again every 40 pt, six at a time.
+    func testOnePushHandsBackOnce() {
+        var w = watch
+        XCTAssertEqual(pushRight(&w, y: 300, by: 45), 1)
+        for _ in 0..<6 { XCTAssertNil(pushRight(&w, y: 300, by: 45)) }
+    }
+
+    func testLeavingTheEdgeArmsItAgain() {
+        var w = watch
+        XCTAssertEqual(pushRight(&w, y: 300, by: 45), 1)
+        XCTAssertNil(w.check(cursor: CGPoint(x: 2400, y: 300), intended: CGPoint(x: 2400, y: 300),
+                             bounds: home, buttonHeld: false))
+        XCTAssertEqual(pushRight(&w, y: 300, by: 45), 1)
+    }
+
+    func testControlComingBackArmsItAgainFromZero() {
+        var w = watch
+        XCTAssertEqual(pushRight(&w, y: 300, by: 45), 1)
+        w.rearm()
+        XCTAssertNil(pushRight(&w, y: 300, by: 20))
+        XCTAssertEqual(pushRight(&w, y: 300, by: 25), 1)
+    }
+
     func testSetupGivesOneZonePerWayIn() throws {
         var setup = ControlSetup(hostEdge: .top, autoReturn: true)
         setup.returnZones = [ReturnZone(edge: .bottom, span: [0, 2560]), ReturnZone(edge: .right, span: [0, 1440])]

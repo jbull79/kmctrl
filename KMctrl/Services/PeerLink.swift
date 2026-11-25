@@ -10,10 +10,14 @@ enum LinkError: Error, LocalizedError {
     case malformed
     case authenticationFailed
     case addressNotFound(String)
+    /// Found over Bonjour, but no address answered.
+    case unreachable(String, [String])
 
     var errorDescription: String? {
         switch self {
         case .addressNotFound(let name): return "Couldn’t find “\(name)” on the network. Check that KMctrl is running on it, then try again."
+        case .unreachable(let name, let hosts):
+            return "Found “\(name)” at \(hosts.joined(separator: ", ")), but it didn’t answer. Something between the Macs may be blocking the connection, such as a VPN or firewall."
         case .closed: return "Connection closed."
         case .lost: return "Connection lost."
         case .notReady: return "Connection not ready."

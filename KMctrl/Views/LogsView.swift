@@ -12,17 +12,23 @@ struct LogsView: View {
         Form {
             Section {
                 Toggle("Enable diagnostics logging", isOn: $log.enabled)
+                Toggle("Keep the log on disk", isOn: $log.diskEnabled)
+                    .disabled(!log.enabled)
             } footer: {
-                Text("Off by default. When on, KMctrl records detailed connection/control logs for troubleshooting (and mirrors to Console).")
+                Text("Diagnostics logging is off by default. When on, KMctrl records detailed connection/control logs for troubleshooting (and mirrors to Console). Keep the log on disk also writes them to ~/Library/Logs/KMctrl/KMctrl.log as they happen, so they survive a crash or a restart. The file keeps the last 24 hours, at most 20 MB. Turning it off deletes the file.")
             }
 
             Section {
                 HStack {
                     Button("Save Logs") { model.pullLogs() }
                     Button("Show in Finder") {
-                        if let f = exchange.lastFolder { NSWorkspace.shared.activateFileViewerSelecting([f]) }
+                        let fm = FileManager.default
+                        let disk = DiskLog.shared.url
+                        if let f = exchange.lastFolder ?? (fm.fileExists(atPath: disk.path) ? disk : nil) {
+                            NSWorkspace.shared.activateFileViewerSelecting([f])
+                        }
                     }
-                    .disabled(exchange.lastFolder == nil)
+                    .disabled(exchange.lastFolder == nil && !(log.enabled && log.diskEnabled))
                 }
                 if let s = exchange.status {
                     Text(s).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -30,7 +36,7 @@ struct LogsView: View {
             } header: {
                 Text("Save to file")
             } footer: {
-                Text("Saves this Mac’s log to ~/Library/Logs/KMctrl and fetches the other Mac’s over the open session. Keystrokes and clipboard contents are never logged.")
+                Text("Saves this Mac’s log to ~/Library/Logs/KMctrl and fetches the other Mac’s over the open session: the newest megabyte of each log on disk, or the last 1,000 lines. Keystrokes and clipboard contents are never logged.")
             }
 
             Section {

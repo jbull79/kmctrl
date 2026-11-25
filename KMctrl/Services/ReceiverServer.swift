@@ -53,8 +53,10 @@ final class ReceiverServer: ObservableObject {
         addr.sin_port = port.bigEndian
         // Bind to the LAN interface address when known (limits exposure to the local
         // network instead of every interface); fall back to INADDR_ANY otherwise.
+        var boundIP: String?
         if let ip = LocalNetwork.ipv4Address(), inet_pton(AF_INET, ip, &addr.sin_addr) == 1 {
             DebugLog.log("listener: binding to LAN address \(ip)")
+            boundIP = ip
         } else {
             addr.sin_addr.s_addr = INADDR_ANY
         }
@@ -105,6 +107,9 @@ final class ReceiverServer: ObservableObject {
 
         // Advertise over Bonjour (NetService just publishes the record; it doesn't own the socket).
         let service = NetService(domain: "", type: "\(serviceType).", name: serviceName, port: Int32(actualPort))
+        // A Mac on Ethernet and Wi-Fi at once is advertised at both addresses, but listens on
+        // one. Say which, so the other Mac dials it first.
+        if let boundIP { service.setTXTRecord(NetService.data(fromTXTRecord: [BonjourResolver.listenAddressKey: Data(boundIP.utf8)])) }
         service.publish()
         advertiser = service
         return true

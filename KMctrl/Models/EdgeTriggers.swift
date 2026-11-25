@@ -100,6 +100,8 @@ struct ReturnWatch {
 
     let zones: [Zone]
     private var triggers: [EdgeReturnTrigger]
+    /// Control was handed back and this push hasn't ended yet.
+    private var handedBack = false
 
     init(zones: [Zone]) {
         self.zones = zones
@@ -121,14 +123,29 @@ struct ReturnWatch {
     }
 
     /// `intended` is where the move would have put the cursor before clamping to `bounds`.
+    /// Hands back once per push. The push goes on for a moment after it hands back (moves still
+    /// on their way, the rest of a flick draining), and used to send it again every 40 pt. It
+    /// arms again when the pointer leaves the way back, or when control comes back (`rearm`).
     mutating func check(cursor: CGPoint, intended: CGPoint, bounds: CGRect, buttonHeld: Bool) -> Int? {
+        if handedBack {
+            let onAWayBack = zones.contains { EdgeGeometry.isOnEdge(cursor, of: bounds, edge: $0.edge, span: $0.span) }
+            if !onAWayBack { handedBack = false }
+            return nil
+        }
         var fired: Int?
         for i in zones.indices {
             let hit = triggers[i].shouldReturn(cursor: cursor, intended: intended, bounds: bounds, edge: zones[i].edge,
                                                buttonHeld: buttonHeld, span: zones[i].span)
             if hit, fired == nil { fired = i }
         }
+        if fired != nil { rearm(); handedBack = true }
         return fired
+    }
+
+    /// Control came back: the next push starts from zero.
+    mutating func rearm() {
+        handedBack = false
+        triggers = Array(repeating: EdgeReturnTrigger(), count: zones.count)
     }
 }
 

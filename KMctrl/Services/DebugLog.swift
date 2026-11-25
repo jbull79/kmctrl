@@ -18,6 +18,7 @@ final class DebugLog: ObservableObject {
     }
 
     private static let key = "kmctrl.diagnosticsEnabled"
+    private static let diskKey = "kmctrl.logToDisk"
     /// Nonisolated mirror so the `log(...)` fast path can check it from any thread.
     nonisolated(unsafe) private static var capture = UserDefaults.standard.bool(forKey: key)
 
@@ -29,11 +30,25 @@ final class DebugLog: ObservableObject {
         }
     }
 
-    private init() { enabled = UserDefaults.standard.bool(forKey: Self.key) }
+    /// While logging, also write each line to ~/Library/Logs/KMctrl/KMctrl.log. On unless
+    /// turned off; turning it off deletes the file.
+    @Published var diskEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(diskEnabled, forKey: Self.diskKey)
+            if !diskEnabled { DiskLog.shared.erase() }
+        }
+    }
+
+    nonisolated static func diskDefault(_ stored: Any?) -> Bool { stored as? Bool ?? true }
+
+    private init() {
+        enabled = UserDefaults.standard.bool(forKey: Self.key)
+        diskEnabled = Self.diskDefault(UserDefaults.standard.object(forKey: Self.diskKey))
+    }
 
     /// Saved and copied logs span days and get read next to the other Mac's, so each line carries
     /// the date, a 24-hour time (whatever the user's clock setting) and the time zone.
-    static func stampFormatter(_ zone: TimeZone) -> DateFormatter {
+    nonisolated static func stampFormatter(_ zone: TimeZone) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = zone
@@ -59,7 +74,9 @@ final class DebugLog: ObservableObject {
     private var flushScheduled = false
 
     private func append(_ message: String, _ level: Level) {
-        pending.append(Entry(time: Date(), level: level, message: message))
+        let entry = Entry(time: Date(), level: level, message: message)
+        pending.append(entry)
+        if diskEnabled { DiskLog.shared.write(Self.line(entry), now: entry.time) }
         guard !flushScheduled else { return }
         flushScheduled = true
         Task { @MainActor [weak self] in

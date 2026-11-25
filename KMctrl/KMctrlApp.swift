@@ -37,6 +37,9 @@ final class AppModel: ObservableObject {
             }
             .store(in: &bag)
         LogExchange.shared.deviceName = { settings.deviceName }
+        // Marks each launch in the log on disk, which runs on across restarts.
+        let info = Bundle.main.infoDictionary
+        DebugLog.log("app: KMctrl \(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?")) started, macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
         // Hotkey is live only while there is a session to re-enter.
         settings.$regrabHotkeyEnabled.combineLatest(host.$state)
             .map { on, state in on && state != .idle }

@@ -81,7 +81,7 @@ final class ControlInjector: @unchecked Sendable {
         guard let e = raw.sanitizedForInjection() else { return }   // out-of-range values used to crash
         switch e.kind {
         case .enterAt:   // edge switch: start where the pointer crossed over, not where it last was
-            lock.lock(); pendDX = 0; pendDY = 0; let bounds = self.bounds; lock.unlock()
+            lock.lock(); pendDX = 0; pendDY = 0; returnWatch?.rearm(); let bounds = self.bounds; lock.unlock()
             cursor = CGPoint(x: min(max(bounds.minX, e.dx), bounds.maxX - 1),
                              y: min(max(bounds.minY, e.dy), bounds.maxY - 1))
             postMouse(mouseDown ? .leftMouseDragged : .mouseMoved, button: .left)
@@ -121,6 +121,9 @@ final class ControlInjector: @unchecked Sendable {
         case .flagsChanged:
             flags = CGEventFlags(rawValue: e.flags)
         case .releaseAll:
+            // Control has gone back. Movement still buffered is the push that handed it back:
+            // drop it rather than glide this pointer on, and arm the way back for next time.
+            lock.lock(); pendDX = 0; pendDY = 0; returnWatch?.rearm(); lock.unlock()
             releaseAll()
         case .mediaKey:
             postMediaKey(MediaKey(key: e.keyCode, isDown: e.button == 1, isRepeat: false))

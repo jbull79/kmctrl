@@ -23,7 +23,17 @@ final class LogExchange: ObservableObject {
         let version = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
         return LogBundle(device: deviceName(), app: version, os: ProcessInfo.processInfo.operatingSystemVersionString,
                          created: Date().timeIntervalSince1970, diagnosticsOn: DebugLog.shared.enabled,
-                         lines: DebugLog.shared.transcript()).sanitized
+                         lines: Self.lines()).sanitized
+    }
+
+    /// The newest megabyte of the log on disk, which reaches back hours; otherwise the last
+    /// 1,000 lines kept in memory.
+    private static func lines() -> String {
+        let log = DebugLog.shared
+        if log.enabled, log.diskEnabled, let disk = DiskLog.shared.tail(maxBytes: LogBundle.maxBytes), !disk.isEmpty {
+            return disk
+        }
+        return log.transcript()
     }
 
     /// Writes this Mac's log. Returns false if it couldn't be written.

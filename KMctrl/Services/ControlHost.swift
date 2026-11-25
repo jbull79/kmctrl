@@ -532,17 +532,18 @@ final class ControlHost: ObservableObject {
                         self.onClipboardReceived(payload, link.remoteFingerprint)
                     }
                 } else if r.isReturnSignal {
-                    DebugLog.log("control host: peer signalled return of control")
                     let at = r.at.flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
                     let zone = r.zone
                     await MainActor.run {
-                        guard let self else { return }
+                        // One that arrives after capture ended is late, not a new hand-back:
+                        // it mustn't set the next landing.
+                        guard let self, self.state == .capturing else { return }
+                        DebugLog.log("control host: peer signalled return of control")
                         // Land our pointer where theirs crossed back, on the monitor that way leads to.
-                        // Duplicate returns arrive after capture ended — don't let them set the next landing.
-                        if let at, let g = self.handoff, self.state == .capturing, let i = g.returnPortal(zone: zone) {
+                        if let at, let g = self.handoff, let i = g.returnPortal(zone: zone) {
                             self.returnLanding = g.returnPoint(portal: i, leaving: at)
                         }
-                        self.endCapture()                                // real return-of-control signal
+                        self.endCapture()
                     }
                 }
             }
